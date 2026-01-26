@@ -34,10 +34,20 @@ jobs:
           mkdir packages
           mkdir "packages/${{ env.PLUGIN_NAME }}"
 
+      - name: Set version in AssemblyInfo.cs
+        run: |
+          $version = "${{ github.ref_name }}"
+          $assemblyInfoPath = "DeepSkyLog/Properties/AssemblyInfo.cs"
+          $content = Get-Content $assemblyInfoPath -Raw
+          $content = $content -replace 'AssemblyVersion\("[\d\.]+"\)', "AssemblyVersion(`"$version`")"
+          $content = $content -replace 'AssemblyFileVersion\("[\d\.]+"\)', "AssemblyFileVersion(`"$version`")"
+          Set-Content $assemblyInfoPath $content
+          Write-Host "Updated AssemblyInfo.cs to version $version"
+
       - name: Build .NET Assemblies
         run: |
           dotnet restore
-          dotnet build "${{ env.PLUGIN_SLN_NAME }}.sln" -c Release -p:PostBuildEvent= -p:Version=${{ github.ref_name }} -o ./bin/Release
+          dotnet build "${{ env.PLUGIN_SLN_NAME }}.sln" -c Release -p:PostBuildEvent= -o ./bin/Release
 
       - name: Prepare package
         run: |
