@@ -18,7 +18,7 @@ permissions:
 
 env:
   PLUGIN_NAME: "DeepSkyLog"
-  PLUGIN_SLN_NAME: "DeepSkyLog"
+  PLUGIN_SLN_NAME: "DeepSkyLog.Plugin"
   PLUGIN_DLL_NAME: "DeepSkyLog.NINAPlugin"
   PLUGIN_MANIFEST_PATH: "d/DeepSkyLog"
 
