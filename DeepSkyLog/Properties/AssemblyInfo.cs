@@ -5,9 +5,7 @@ using System.Runtime.InteropServices;
 [assembly: Guid("728cc59b-a4a0-45cf-89ed-ecd2aa437dd9")]
 
 // [MANDATORY] The assembly versioning
-//Should be incremented for each new release build of a plugin
-[assembly: AssemblyVersion("1.0.0.1")]
-[assembly: AssemblyFileVersion("1.0.0.1")]
+// Version is now set in csproj and can be overridden via -p:Version=x.x.x.x during build
 
 // [MANDATORY] The name of your plugin
 [assembly: AssemblyTitle("DeepSkyLog")]
