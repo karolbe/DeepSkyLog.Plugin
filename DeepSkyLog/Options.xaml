@@ -1,0 +1,193 @@
+﻿<ResourceDictionary
+    x:Class="DeepSkyLog.NINAPlugin.Options"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:local="clr-namespace:DeepSkyLog.NINAPlugin">
+
+    <!-- Converters -->
+    <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter" />
+    <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
+    <local:NullOrEmptyToVisibilityConverter x:Key="NullOrEmptyToVisibilityConverter" />
+
+    <DataTemplate x:Key="DeepSkyLog_Options">
+        <StackPanel Margin="0,10,0,0"
+                    DataContext="{Binding}"
+                    Orientation="Vertical">
+
+            <!-- Plugin Enabled -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Plugin Enabled">
+                    <TextBlock.ToolTip>
+                        When the plugin is enabled, metadata will be sent to the DeepSkyLog server.
+                        Set to Off to completely disable.
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <CheckBox Width="50"
+                          Margin="10,0,0,0"
+                          VerticalAlignment="Center"
+                          IsChecked="{Binding DeepSkyLogEnabled}" />
+            </StackPanel>
+
+            <!-- Plugin Enabled -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Allow SNAPSHOTs">
+                    <TextBlock.ToolTip>
+                        Allow Image of type SNAPSHOT as well
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <CheckBox Width="50"
+                          Margin="10,0,0,0"
+                          VerticalAlignment="Center"
+                          IsChecked="{Binding DeepSkyLogAllowSnapshots}" />
+            </StackPanel>
+
+            <!-- Authentication Section -->
+            <StackPanel Margin="0,0,0,10"
+                        Orientation="Horizontal">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Account">
+                    <TextBlock.ToolTip>
+                        Connect your DeepSkyLog account to sync your imaging data.
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <StackPanel Margin="10,0,0,0" Orientation="Horizontal">
+                    <!-- Login Button (shown when not authenticated) -->
+                    <Button Content="Login with DeepSkyLog"
+                            Command="{Binding LoginCommand}"
+                            Padding="15,8"
+                            MinWidth="150"
+                            Visibility="{Binding IsAuthenticated, Converter={StaticResource InverseBooleanToVisibilityConverter}}">
+                        <Button.Style>
+                            <Style TargetType="Button">
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding IsAuthenticating}" Value="True">
+                                        <Setter Property="IsEnabled" Value="False" />
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </Button.Style>
+                    </Button>
+                    <!-- Authenticated status (shown when authenticated) -->
+                    <StackPanel Orientation="Horizontal"
+                                Visibility="{Binding IsAuthenticated, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <TextBlock VerticalAlignment="Center"
+                                   Foreground="LightGreen"
+                                   Text="Connected as " />
+                        <TextBlock VerticalAlignment="Center"
+                                   Foreground="LightGreen"
+                                   FontWeight="Bold"
+                                   Text="{Binding AuthenticatedUsername}" />
+                        <Button Content="Logout"
+                                Command="{Binding LogoutCommand}"
+                                Margin="10,0,0,0"
+                                Padding="10,5" />
+                    </StackPanel>
+                    <!-- Authenticating indicator -->
+                    <TextBlock VerticalAlignment="Center"
+                               Margin="10,0,0,0"
+                               Text="Authenticating..."
+                               Visibility="{Binding IsAuthenticating, Converter={StaticResource BooleanToVisibilityConverter}}" />
+                </StackPanel>
+            </StackPanel>
+
+            <!-- Status Message -->
+            <StackPanel Margin="0,0,0,10"
+                        Orientation="Horizontal"
+                        Visibility="{Binding AuthStatusMessage, Converter={StaticResource NullOrEmptyToVisibilityConverter}}">
+                <TextBlock Width="150" />
+                <TextBlock Margin="10,0,0,0"
+                           Foreground="Gray"
+                           FontStyle="Italic"
+                           Text="{Binding AuthStatusMessage}"
+                           TextWrapping="Wrap"
+                           MaxWidth="350" />
+            </StackPanel>
+
+            <!-- Open Web App -->
+            <StackPanel Margin="0,0,0,10"
+                        Orientation="Horizontal">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Web App">
+                    <TextBlock.ToolTip>
+                        Open the DeepSkyLog web application in your browser.
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <Button Content="Open DeepSkyLog"
+                        Command="{Binding OpenWebAppCommand}"
+                        Margin="10,0,0,0"
+                        Padding="15,8" />
+            </StackPanel>
+
+            <!-- Location Selector -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Location">
+                    <TextBlock.ToolTip>
+                        Select the observing location for your imaging sessions.
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <ComboBox Width="300"
+                          Margin="10,0,0,0"
+                          ItemsSource="{Binding Locations}"
+                          SelectedItem="{Binding SelectedLocation}"
+                          DisplayMemberPath="Name" />
+            </StackPanel>
+
+            <!-- Equipment Selector -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Equipment">
+                    <TextBlock.ToolTip>
+                        Select the equipment setup used for imaging.
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <ComboBox Width="300"
+                          Margin="10,0,0,0"
+                          ItemsSource="{Binding Equipment}"
+                          SelectedItem="{Binding SelectedEquipment}" />
+            </StackPanel>
+            <Separator Width="20"
+           Height="5"
+           Background="Transparent" />
+            <TextBlock TextWrapping="Wrap">
+    <Run>The following key metadata is sent to DeepSkyLog:</Run>
+    <LineBreak />
+    <LineBreak />
+    
+    <Run FontWeight="Bold">• Image Details:</Run> <Run> File path, filter, exposure time, binning, and camera temperature.</Run>
+    <LineBreak />
+    <Run FontWeight="Bold">• Quality Metrics:</Run> <Run> Mean and median ADU, detected stars, HFR, FWHM, and eccentricity.</Run>
+    <LineBreak />
+    <Run FontWeight="Bold">• Guiding &amp; Focusing:</Run> <Run> Guiding RMS, focuser position, rotator angle, and pier side.</Run>
+    <LineBreak />
+    <Run FontWeight="Bold">• Weather Conditions:</Run> <Run> Temperature, humidity, wind speed, cloud cover, and sky quality.</Run>
+    <LineBreak />
+    <Run FontWeight="Bold">• Target &amp; Equipment:</Run> <Run> Target name, RA/DEC coordinates, telescope, camera, focal length, and pixel size.</Run>
+    <LineBreak />
+    <Run FontWeight="Bold">• Observation Info:</Run> <Run> Airmass, mount position, and observer location.</Run>
+    <LineBreak />
+    <LineBreak />
+    <Run>This data helps you monitor imaging conditions, analyze frame quality, and optimize your astrophotography workflow. 🚀</Run>
+            </TextBlock>
+
+        </StackPanel>
+    </DataTemplate>
+</ResourceDictionary>
