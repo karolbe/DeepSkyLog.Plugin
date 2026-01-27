@@ -17,7 +17,7 @@ using System.Runtime.InteropServices;
 // The following attributes are not required for the plugin per se, but are required by the official manifest meta data
 
 // Your name
-[assembly: AssemblyCompany("DeepSkyLog")]
+[assembly: AssemblyCompany("Karol Bryd")]
 // The product name that this plugin is part of
 [assembly: AssemblyProduct("DeepSkyLog")]
 [assembly: AssemblyCopyright("Copyright © 2026 Karol Bryd")]
@@ -38,7 +38,7 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyMetadata("Homepage", "https://app.deepskylog.space")]
 
 //[Optional] Common tags that quickly describe your plugin
-[assembly: AssemblyMetadata("Tags", "astrophotography, project, management, log, logging, tracking, deepskylog, imaging, session")]
+[assembly: AssemblyMetadata("Tags", "astrophotography,project,management,log,logging,tracking,deepskylog,imaging,session")]
 
 //[Optional] A link that will show a log of all changes in between your plugin's versions
 [assembly: AssemblyMetadata("ChangelogURL", "https://github.com/karolbe/DeepSkyLog.Plugin/blob/master/DeepSkyLog/CHANGELOG.md")]
