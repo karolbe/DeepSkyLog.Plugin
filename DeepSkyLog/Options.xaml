@@ -9,6 +9,7 @@
     <local:InverseBooleanToVisibilityConverter x:Key="InverseBooleanToVisibilityConverter" />
     <local:NullOrEmptyToVisibilityConverter x:Key="NullOrEmptyToVisibilityConverter" />
 
+
     <DataTemplate x:Key="DeepSkyLog_Options">
         <StackPanel Margin="0,10,0,0"
                     DataContext="{Binding}"
@@ -164,6 +165,22 @@
                           ItemsSource="{Binding Equipment}"
                           SelectedItem="{Binding SelectedEquipment}" />
             </StackPanel>
+
+            <!-- Refresh Button -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal"
+                        Visibility="{Binding IsAuthenticated, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <TextBlock Width="150" />
+                <Button Content="Refresh"
+                        Command="{Binding RefreshCommand}"
+                        Margin="10,0,0,0"
+                        Padding="15,5">
+                    <Button.ToolTip>
+                        Reload locations and equipment from DeepSkyLog.
+                    </Button.ToolTip>
+                </Button>
+            </StackPanel>
+
             <Separator Width="20"
            Height="5"
            Background="Transparent" />
@@ -171,6 +188,7 @@
     <Run>The following key metadata is sent to DeepSkyLog:</Run>
     <LineBreak />
     <LineBreak />
+
     
     <Run FontWeight="Bold">• Image Details:</Run> <Run> File path, filter, exposure time, binning, and camera temperature.</Run>
     <LineBreak />
@@ -185,7 +203,7 @@
     <Run FontWeight="Bold">• Observation Info:</Run> <Run> Airmass, mount position, and observer location.</Run>
     <LineBreak />
     <LineBreak />
-    <Run>This data helps you monitor imaging conditions, analyze frame quality, and optimize your astrophotography workflow. 🚀</Run>
+    <Run>This data helps you monitor imaging conditions, analyze frame quality, and plan future sessions.</Run>
             </TextBlock>
 
         </StackPanel>

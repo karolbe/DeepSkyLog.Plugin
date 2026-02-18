@@ -57,8 +57,7 @@ using System.Runtime.InteropServices;
 Features:
 - Automatic upload of LIGHT frame metadata as images are saved
 - Track image quality metrics, guiding performance, and weather conditions
-- Register and manage your astrophotography sessions in one place, more on https://deepskylog.space
-Data synchronized includes target coordinates, exposure settings, quality metrics (HFR/FWHM, stars detected), guiding RMS, weather data, and more.")]
+- Register and manage your astrophotography sessions in one place, more on https://deepskylog.space")]
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
