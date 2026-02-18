@@ -47,6 +47,7 @@ namespace DeepSkyLog.NINAPlugin {
             LoginCommand = new RelayCommand(ExecuteLogin, CanExecuteLogin);
             LogoutCommand = new RelayCommand(ExecuteLogout, CanExecuteLogout);
             OpenWebAppCommand = new RelayCommand(ExecuteOpenWebApp);
+            RefreshCommand = new RelayCommand(ExecuteRefresh, CanExecuteRefresh);
 
             // Initialize collections with empty placeholder items
             _locations.Add(new DeepSkyLogWatcher.Location { Id = 0, Name = "Select Location..." });
@@ -87,6 +88,7 @@ namespace DeepSkyLog.NINAPlugin {
         public ICommand LoginCommand { get; }
         public ICommand LogoutCommand { get; }
         public ICommand OpenWebAppCommand { get; }
+        public ICommand RefreshCommand { get; }
 
         public bool IsAuthenticated => !string.IsNullOrEmpty(DeepSkyLogKey);
 
@@ -155,6 +157,12 @@ namespace DeepSkyLog.NINAPlugin {
         }
 
         private bool CanExecuteLogout(object parameter) => IsAuthenticated;
+
+        private void ExecuteRefresh(object parameter) {
+            Task.Run(LoadDataAsync);
+        }
+
+        private bool CanExecuteRefresh(object parameter) => IsAuthenticated;
 
         private void ExecuteOpenWebApp(object parameter) {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
