@@ -35,7 +35,7 @@ using System.Runtime.InteropServices;
 // The following attributes are optional for the official manifest meta data
 
 //[Optional] Your plugin homepage URL - omit if not applicaple
-[assembly: AssemblyMetadata("Homepage", "https://app.deepskylog.space")]
+[assembly: AssemblyMetadata("Homepage", "https://deepskylog.space")]
 
 //[Optional] Common tags that quickly describe your plugin
 [assembly: AssemblyMetadata("Tags", "astrophotography,project,management,log,logging,tracking,deepskylog,imaging,session")]
@@ -52,13 +52,13 @@ using System.Runtime.InteropServices;
 //[Optional] An in-depth description of your plugin
 [assembly: AssemblyMetadata("LongDescription", @"DeepSkyLog automatically syncs your astrophotography session data with the DeepSkyLog web application.
 
-Features:
-- One-click browser-based login with your DeepSkyLog account
-- Automatic upload of LIGHT frame metadata as images are saved
-- Select your observing location and equipment setup
-- Track image quality metrics, guiding performance, and weather conditions
 
-Data synchronized includes target coordinates, exposure settings, quality metrics (HFR, FWHM, stars detected), guiding RMS, focuser position, weather data, and more.")]
+
+Features:
+- Automatic upload of LIGHT frame metadata as images are saved
+- Track image quality metrics, guiding performance, and weather conditions
+- Register and manage your astrophotography sessions in one place, more on https://deepskylog.space
+Data synchronized includes target coordinates, exposure settings, quality metrics (HFR/FWHM, stars detected), guiding RMS, weather data, and more.")]
 
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
