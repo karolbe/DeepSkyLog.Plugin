@@ -10,7 +10,7 @@ Automatically sync your astrophotography session data with [DeepSkyLog](https://
 
 ## Installation
 
-1. Download the plugin from the NINA plugin manager or from [GitHub Releases](https://github.com/karolbe/deepskylog-nina-plugin/releases)
+1. Download the plugin from the NINA plugin manager or from [GitHub Releases](https://github.com/karolbe/DeepSkyLog.Plugin/releases)
 2. Install the plugin in NINA
 3. Go to Options > DeepSkyLog
 4. Click "Login with DeepSkyLog" to authenticate
@@ -19,7 +19,7 @@ Automatically sync your astrophotography session data with [DeepSkyLog](https://
 
 ## Data Synchronized
 
-The following metadata is sent to DeepSkyLog when LIGHT frames are saved:
+The following metadata is sent to DeepSkyLog when LIGHT frames are saved. Image itself is not sent.
 
 ### Image Details
 
@@ -48,7 +48,7 @@ The following metadata is sent to DeepSkyLog when LIGHT frames are saved:
 ## Requirements
 
 * N.I.N.A. 3.0.0.2017 or later
-* A DeepSkyLog account at [deepskylog.space](https://deepskylog.space)
+* A DeepSkyLog account at [deepskylog.space](https://app.deepskylog.space)
 
 ## License
 
