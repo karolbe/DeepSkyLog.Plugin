@@ -201,10 +201,9 @@ namespace DeepSkyLog.NINAPlugin {
         }
 
         public string DeepSkyLogKey {
-            get => Settings.Default.DeepSkyLogKey;
+            get => TokenStorage.Load();
             set {
-                Settings.Default.DeepSkyLogKey = value;
-                Settings.Default.Save();
+                TokenStorage.Save(value);
                 RaisePropertyChanged();
                 RaisePropertyChanged(nameof(IsAuthenticated));
                 RaisePropertyChanged(nameof(CanLogin));
