@@ -6,6 +6,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Net;
 using System.Net.Http;
+using System.Security.Cryptography;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
@@ -18,6 +19,7 @@ namespace DeepSkyLog.NINAPlugin {
         private static readonly HttpClient _httpClient = new HttpClient();
         private HttpListener _listener;
         private CancellationTokenSource _cts;
+        private string _expectedState; // CSRF nonce for the in-flight sign-in attempt
 
         public event Action<string> OnTokenReceived;
         public event Action<string> OnAuthenticationFailed;
@@ -37,10 +39,15 @@ namespace DeepSkyLog.NINAPlugin {
 
                 Logger.Info($"DeepSkyLog: Starting authentication listener on {redirectUri}");
 
+                // Generate a per-attempt CSRF nonce. The server echoes it back in the
+                // callback; mismatch (or absent local state) → reject. Without this an
+                // attacker who guesses the loopback port can race a forged token in.
+                _expectedState = GenerateState();
+
                 // Open browser to authentication page
                 // Use the same endpoint as the desktop app: /desktop-auth?callback=...
-                string authUrl = $"{BaseUrl}/desktop-auth?callback={Uri.EscapeDataString(redirectUri)}";
-                Logger.Info($"DeepSkyLog: Opening browser to {authUrl}");
+                string authUrl = $"{BaseUrl}/desktop-auth?callback={Uri.EscapeDataString(redirectUri)}&state={Uri.EscapeDataString(_expectedState)}";
+                Logger.Info($"DeepSkyLog: Opening browser to /desktop-auth (state hidden)");
 
                 Process.Start(new ProcessStartInfo {
                     FileName = authUrl,
@@ -85,12 +92,14 @@ namespace DeepSkyLog.NINAPlugin {
                     var request = context.Request;
                     var response = context.Response;
 
-                    Logger.Debug($"DeepSkyLog: Received callback request: {request.Url}");
+                    // Don't log the request URL — it carries the one-time token.
+                    Logger.Debug("DeepSkyLog: Received callback request");
 
                     // Parse the query string for token
                     var query = HttpUtility.ParseQueryString(request.Url.Query);
                     string oneTimeToken = query["token"];
                     string error = query["error"];
+                    string returnedState = query["state"];
 
                     string responseHtml;
 
@@ -103,6 +112,30 @@ namespace DeepSkyLog.NINAPlugin {
                     }
 
                     if (!string.IsNullOrEmpty(oneTimeToken)) {
+                        // CSRF check: only accept callbacks whose state matches the one we
+                        // generated for this sign-in attempt. A null _expectedState means
+                        // no sign-in is in progress on this instance — reject regardless.
+                        if (string.IsNullOrEmpty(_expectedState)) {
+                            Logger.Warning("DeepSkyLog: Callback rejected — no sign-in in progress");
+                            responseHtml = GetErrorHtml("No sign-in in progress");
+                            SendResponse(response, responseHtml);
+                            OnAuthenticationFailed?.Invoke("No sign-in in progress");
+                            return false;
+                        }
+                        // If the server echoed a state, it must match. (If it didn't echo
+                        // anything, we still required _expectedState to be set above, so the
+                        // drive-by attack is blocked even before the server companion change
+                        // ships.)
+                        if (!string.IsNullOrEmpty(returnedState) && !FixedTimeEquals(returnedState, _expectedState)) {
+                            Logger.Warning("DeepSkyLog: Callback rejected — state mismatch");
+                            responseHtml = GetErrorHtml("Sign-in state mismatch");
+                            SendResponse(response, responseHtml);
+                            OnAuthenticationFailed?.Invoke("Sign-in state mismatch");
+                            return false;
+                        }
+                        // Single-use: clear regardless of exchange outcome below.
+                        _expectedState = null;
+
                         Logger.Info("DeepSkyLog: One-time token received, exchanging for API token...");
 
                         // Exchange one-time token for long-lived API token
@@ -153,10 +186,11 @@ namespace DeepSkyLog.NINAPlugin {
                 var jsonContent = JsonConvert.SerializeObject(requestBody);
                 var content = new StringContent(jsonContent, Encoding.UTF8, "application/json");
 
-                var response = await _httpClient.PostAsync($"{BaseUrl}/api/auth/exchange", content);
+                using var response = await _httpClient.PostAsync($"{BaseUrl}/api/auth/exchange", content);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
-                Logger.Debug($"DeepSkyLog: Token exchange response: {response.StatusCode} - {responseBody}");
+                // Don't log the body — on success it contains the long-lived API token.
+                Logger.Debug($"DeepSkyLog: Token exchange response: {response.StatusCode}");
 
                 if (response.IsSuccessStatusCode) {
                     var result = JsonConvert.DeserializeObject<TokenExchangeResponse>(responseBody);
@@ -226,10 +260,10 @@ namespace DeepSkyLog.NINAPlugin {
             }
 
             try {
-                var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/auth/validate");
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/auth/validate");
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiToken);
 
-                var response = await _httpClient.SendAsync(request);
+                using var response = await _httpClient.SendAsync(request);
                 var responseBody = await response.Content.ReadAsStringAsync();
 
                 Logger.Debug($"DeepSkyLog: Token validation response: {response.StatusCode}");
@@ -306,7 +340,25 @@ namespace DeepSkyLog.NINAPlugin {
 
         public void CancelAuthentication() {
             _cts?.Cancel();
+            _expectedState = null;
             StopListener();
+        }
+
+        private static string GenerateState() {
+            var bytes = new byte[32];
+            using (var rng = RandomNumberGenerator.Create()) {
+                rng.GetBytes(bytes);
+            }
+            return BitConverter.ToString(bytes).Replace("-", "").ToLowerInvariant();
+        }
+
+        private static bool FixedTimeEquals(string a, string b) {
+            if (a == null || b == null || a.Length != b.Length) return false;
+            int diff = 0;
+            for (int i = 0; i < a.Length; i++) {
+                diff |= a[i] ^ b[i];
+            }
+            return diff == 0;
         }
 
         private void StopListener() {
