@@ -107,18 +107,18 @@ namespace DeepSkyLog.NINAPlugin {
                 var baseUrl = "https://app.deepskylog.space/api/v1/nina/upload";
                 var fullUrl = $"{baseUrl}{queryString}";
 
-                var request = new HttpRequestMessage(HttpMethod.Post, fullUrl) {
+                using var request = new HttpRequestMessage(HttpMethod.Post, fullUrl) {
                     Content = new StringContent(json, Encoding.UTF8, "application/json")
                 };
-                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", Settings.Default.DeepSkyLogKey);
+                request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", TokenStorage.Load());
 
-                HttpResponseMessage response = await client.SendAsync(request);
-                string responseContent = await response.Content.ReadAsStringAsync();
-                Logger.Debug($"Server response: {response.StatusCode} - Content: {responseContent}");
+                using var response = await client.SendAsync(request);
+                Logger.Debug($"Server response: {response.StatusCode}");
 
                 if (response.IsSuccessStatusCode) {
                     return true;
                 } else {
+                    string responseContent = await response.Content.ReadAsStringAsync();
                     Logger.Debug($"Server responded with: {response.StatusCode} - {responseContent}");
                 }
             } catch (Exception ex) {
@@ -172,13 +172,13 @@ namespace DeepSkyLog.NINAPlugin {
         public static async Task<List<Location>> GetLocationsAsync(string apiKey) {
             try {
                 string baseUrl = "https://app.deepskylog.space";
-                var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v1/list/locations");
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v1/list/locations");
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
-                HttpResponseMessage response = await client.SendAsync(request);
+                using var response = await client.SendAsync(request);
                 string responseContent = await response.Content.ReadAsStringAsync();
-                
-                Logger.Debug($"Locations API response: {response.StatusCode} - {responseContent}");
+
+                Logger.Debug($"Locations API response: {response.StatusCode}");
 
                 if (response.IsSuccessStatusCode) {
                     var locationResponse = JsonConvert.DeserializeObject<LocationListResponse>(responseContent);
@@ -198,13 +198,13 @@ namespace DeepSkyLog.NINAPlugin {
         public static async Task<List<Equipment>> GetEquipmentsAsync(string apiKey) {
             try {
                 string baseUrl = "https://app.deepskylog.space";
-                var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v1/list/equipments");
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v1/list/equipments");
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
-                HttpResponseMessage response = await client.SendAsync(request);
+                using var response = await client.SendAsync(request);
                 string responseContent = await response.Content.ReadAsStringAsync();
-                
-                Logger.Debug($"Equipment API response: {response.StatusCode} - {responseContent}");
+
+                Logger.Debug($"Equipment API response: {response.StatusCode}");
 
                 if (response.IsSuccessStatusCode) {
                     var equipmentResponse = JsonConvert.DeserializeObject<EquipmentListResponse>(responseContent);
