@@ -50,15 +50,32 @@ using System.Runtime.InteropServices;
 //[Optional] An additional url to an example example screenshot of your plugin in action
 [assembly: AssemblyMetadata("AltScreenshotURL", "https://deepskylog.space/images/illustrations/dashboard.jpg")]
 //[Optional] An in-depth description of your plugin
-[assembly: AssemblyMetadata("LongDescription", @"DeepSkyLog automatically syncs your astrophotography session data with the DeepSkyLog web application.
+[assembly: AssemblyMetadata("LongDescription", @"DeepSkyLog turns your N.I.N.A. captures into an organized, living record of every project - so you always know what you've shot, how good it is, and what to image next.
 
+As each LIGHT frame is saved, the plugin quietly syncs its metadata to the DeepSkyLog web app giving you an up-to-date view of all your imaging in one place.
 
+As an owner of a remote observatory, astrophotography traveller I know how hard it is to keep track of all the data you collect night after night.
+I created DeepSkyLog to make it easy to manage my all projects, track progress, and plan my future sessions. I hope it will help you too.
 
-Features:
-- Automatic upload of LIGHT frame metadata as images are saved
-- Track image quality metrics, guiding performance, and weather conditions
-- Register and manage your astrophotography sessions in one place, more on https://deepskylog.space")]
+Here is how DeepSkyLog can help you:
 
+• All your targets are organized as Projects, each Project has equipment, location and keeps details about all FITS files captured for it
+• See total integration time accumulate night after night, assign goals, and track your progress toward them
+• Monitor image quality over time - HFR, FWHM, guiding RMS, eccentricity
+• Spot your best and worst frames, especially if you do not own expensive rig :-)
+
+You can also plan future sessions with DeepSkyLog:
+
+• Know exactly which filters still need more data to finish a target
+• Plan upcoming nights around what each project still needs
+• Use interactive sky map to find interesting targets to image and see what you have already photographed
+• Preview mosaic panels (as well as all your targets) on an interactive sky map
+
+Explore a live demo account - no signup: https://deepskylog.space/demo-login
+
+Free version available, or upgrade to Pro for more features:
+
+Learn more at https://deepskylog.space")]
 // Setting ComVisible to false makes the types in this assembly not visible
 // to COM components.  If you need to access a type in this assembly from
 // COM, set the ComVisible attribute to true on that type.
