@@ -17,7 +17,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
-using System.Web;
 using static NINA.Equipment.Model.CaptureSequence;
 
 namespace DeepSkyLog.NINAPlugin {
@@ -32,8 +31,12 @@ namespace DeepSkyLog.NINAPlugin {
             imageSaveMediator.ImageSaved += ImageSaveMeditator_ImageSaved;
             Logger.Info("DeepSkyLog is loading");
         }
-        private string GetImageFilePath(Uri imageUri) {
-            return HttpUtility.UrlDecode(imageUri.AbsolutePath);
+        internal static string GetImageFilePath(Uri imageUri) {
+            // Use LocalPath, not UrlDecode(AbsolutePath): AbsolutePath keeps a leading slash and a
+            // '+' in the path (e.g. a target folder named "M56+92"), and UrlDecode then turns that
+            // '+' into a space, producing a path that doesn't exist on disk. LocalPath resolves the
+            // file:// URI to the correct Windows path directly.
+            return imageUri.LocalPath;
         }
 
         private void ImageSaveMeditator_ImageSaved(object sender, ImageSavedEventArgs msg) {
@@ -59,13 +62,20 @@ namespace DeepSkyLog.NINAPlugin {
                 // Attempt to retry any failed requests first
                 await RetryFailedRequestsAsync();
 
+                string imageFilePath = GetImageFilePath(msg.PathToImage);
                 WeatherMetaDataRecord weatherRecord = new WeatherMetaDataRecord(msg);
-                ImageMetaDataRecord imageMetaDataRecord = new ImageMetaDataRecord(msg, GetImageFilePath(msg.PathToImage));
+                ImageMetaDataRecord imageMetaDataRecord = new ImageMetaDataRecord(msg, imageFilePath);
                 AcquisitionMetaDataRecord acquisitionMetaDataRecord = new AcquisitionMetaDataRecord(msg);
 
                 // Calculate checksum of the first 50KB of the image file
-                string imageFilePath = GetImageFilePath(msg.PathToImage);
                 string checksum = CalculateFileChecksum(imageFilePath);
+                if (string.IsNullOrEmpty(checksum)) {
+                    // File was unreadable or not yet flushed. Fall back to a deterministic key from
+                    // the path and exposure start so the frame still uploads and de-duplicates on
+                    // re-send — the server rejects a null checksum and drops the whole frame.
+                    checksum = FallbackChecksum(imageFilePath, msg.MetaData.Image.ExposureStart);
+                    Logger.Warning($"No file checksum for {imageFilePath}; using fallback {checksum}");
+                }
 
                 var combinedData = new {
                     weatherRecord,
@@ -239,7 +249,18 @@ namespace DeepSkyLog.NINAPlugin {
             return (locationId, equipmentId);
         }
 
-        private static string CalculateFileChecksum(string filePath) {
+        // Deterministic stand-in for the file content hash when the file can't be read. Derived
+        // from the path and exposure start so the same frame maps to the same key on retry, keeping
+        // server-side de-duplication working. Prefixed "nocks-" to mark it as a non-content hash.
+        internal static string FallbackChecksum(string filePath, DateTime exposureStart) {
+            string seed = (filePath ?? string.Empty) + "|" + exposureStart.ToString("o");
+            using (var sha256 = SHA256.Create()) {
+                byte[] hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(seed));
+                return "nocks-" + Convert.ToHexString(hashBytes).ToLowerInvariant();
+            }
+        }
+
+        internal static string CalculateFileChecksum(string filePath) {
             try {
                 if (!File.Exists(filePath)) {
                     Logger.Warning($"File not found for checksum calculation: {filePath}");
@@ -436,6 +457,8 @@ namespace DeepSkyLog.NINAPlugin {
             public double ObserverLatitude { get; }
             public double ObserverLongitude { get; }
             public double ObserverElevation { get; }
+
+            public AcquisitionMetaDataRecord() { }
 
             public AcquisitionMetaDataRecord(ImageSavedEventArgs msg) {
                 TargetName = msg.MetaData.Target.Name;
