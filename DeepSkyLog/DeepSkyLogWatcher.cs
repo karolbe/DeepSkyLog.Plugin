@@ -31,7 +31,7 @@ namespace DeepSkyLog.NINAPlugin {
             imageSaveMediator.ImageSaved += ImageSaveMeditator_ImageSaved;
             Logger.Info("DeepSkyLog is loading");
         }
-        private string GetImageFilePath(Uri imageUri) {
+        internal static string GetImageFilePath(Uri imageUri) {
             // Use LocalPath, not UrlDecode(AbsolutePath): AbsolutePath keeps a leading slash and a
             // '+' in the path (e.g. a target folder named "M56+92"), and UrlDecode then turns that
             // '+' into a space, producing a path that doesn't exist on disk. LocalPath resolves the
@@ -62,12 +62,12 @@ namespace DeepSkyLog.NINAPlugin {
                 // Attempt to retry any failed requests first
                 await RetryFailedRequestsAsync();
 
+                string imageFilePath = GetImageFilePath(msg.PathToImage);
                 WeatherMetaDataRecord weatherRecord = new WeatherMetaDataRecord(msg);
-                ImageMetaDataRecord imageMetaDataRecord = new ImageMetaDataRecord(msg, GetImageFilePath(msg.PathToImage));
+                ImageMetaDataRecord imageMetaDataRecord = new ImageMetaDataRecord(msg, imageFilePath);
                 AcquisitionMetaDataRecord acquisitionMetaDataRecord = new AcquisitionMetaDataRecord(msg);
 
                 // Calculate checksum of the first 50KB of the image file
-                string imageFilePath = GetImageFilePath(msg.PathToImage);
                 string checksum = CalculateFileChecksum(imageFilePath);
                 if (string.IsNullOrEmpty(checksum)) {
                     // File was unreadable or not yet flushed. Fall back to a deterministic key from
@@ -252,7 +252,7 @@ namespace DeepSkyLog.NINAPlugin {
         // Deterministic stand-in for the file content hash when the file can't be read. Derived
         // from the path and exposure start so the same frame maps to the same key on retry, keeping
         // server-side de-duplication working. Prefixed "nocks-" to mark it as a non-content hash.
-        private static string FallbackChecksum(string filePath, DateTime exposureStart) {
+        internal static string FallbackChecksum(string filePath, DateTime exposureStart) {
             string seed = (filePath ?? string.Empty) + "|" + exposureStart.ToString("o");
             using (var sha256 = SHA256.Create()) {
                 byte[] hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(seed));
@@ -260,7 +260,7 @@ namespace DeepSkyLog.NINAPlugin {
             }
         }
 
-        private static string CalculateFileChecksum(string filePath) {
+        internal static string CalculateFileChecksum(string filePath) {
             try {
                 if (!File.Exists(filePath)) {
                     Logger.Warning($"File not found for checksum calculation: {filePath}");
@@ -457,6 +457,8 @@ namespace DeepSkyLog.NINAPlugin {
             public double ObserverLatitude { get; }
             public double ObserverLongitude { get; }
             public double ObserverElevation { get; }
+
+            public AcquisitionMetaDataRecord() { }
 
             public AcquisitionMetaDataRecord(ImageSavedEventArgs msg) {
                 TargetName = msg.MetaData.Target.Name;
