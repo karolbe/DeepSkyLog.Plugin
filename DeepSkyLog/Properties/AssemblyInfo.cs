@@ -25,8 +25,10 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyProduct("DeepSkyLog")]
 [assembly: AssemblyCopyright("Copyright © 2026 Karol Bryd")]
 
-// The minimum Version of N.I.N.A. that this plugin is compatible with
-[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.0.0.2017")]
+// The minimum Version of N.I.N.A. that this plugin is compatible with.
+// Raised to 3.2 for live session telemetry: IFocuserConsumer.NewAutoFocusPoint arrived in 3.2, and
+// ISequenceMediator's SequenceStarting/SequenceFinished events in 3.1.
+[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.2.0.9001")]
 
 // The license your plugin code is using
 [assembly: AssemblyMetadata("License", "MPL-2.0")]

@@ -50,6 +50,43 @@
                           IsChecked="{Binding DeepSkyLogAllowSnapshots}" />
             </StackPanel>
 
+            <!-- Live session telemetry -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Live Telemetry">
+                    <TextBlock.ToolTip>
+                        Send live session data (mount pointing, safety monitor, roof state,
+                        autofocus runs, guiding) to DeepSkyLog while a sequence is running.
+                        No images are uploaded. Shown on the Live page in the web app.
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <CheckBox Width="50"
+                          Margin="10,0,0,0"
+                          VerticalAlignment="Center"
+                          IsChecked="{Binding DeepSkyLogTelemetryEnabled}" />
+            </StackPanel>
+
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal"
+                        Visibility="{Binding DeepSkyLogTelemetryEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Report Every (s)">
+                    <TextBlock.ToolTip>
+                        How often telemetry is sent, in seconds. 10 is a good default;
+                        values outside 5-300 are clamped.
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <TextBox Width="50"
+                         Margin="10,0,0,0"
+                         VerticalAlignment="Center"
+                         Text="{Binding DeepSkyLogTelemetryIntervalSeconds, UpdateSourceTrigger=LostFocus}" />
+            </StackPanel>
+
             <!-- Authentication Section -->
             <StackPanel Margin="0,0,0,10"
                         Orientation="Horizontal">

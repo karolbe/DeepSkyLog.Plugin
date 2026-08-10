@@ -1,8 +1,10 @@
 using DeepSkyLog.NINAPlugin.Properties;
 using NINA.Core.Utility;
+using NINA.Equipment.Interfaces.Mediator;
 using NINA.Plugin;
 using NINA.Plugin.Interfaces;
 using NINA.Profile.Interfaces;
+using NINA.Sequencer.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.ViewModel;
 using System.ComponentModel;
@@ -24,12 +26,23 @@ namespace DeepSkyLog.NINAPlugin {
         private DeepSkyLogWatcher.Location _selectedLocation;
         private DeepSkyLogWatcher.Equipment _selectedEquipment;
         private readonly AuthenticationService _authService;
+        private readonly TelemetryCollector _telemetryCollector;
+        private readonly TelemetryUploader _telemetryUploader;
         private bool _isAuthenticating;
         private string _authStatusMessage;
         private string _authenticatedUsername;
 
         [ImportingConstructor]
-        public DeepSkyLogPlugin(IProfileService profileService, IImageSaveMediator imageSaveMediator, IImageHistoryVM imageHistory) {
+        public DeepSkyLogPlugin(IProfileService profileService,
+                                IImageSaveMediator imageSaveMediator,
+                                IImageHistoryVM imageHistory,
+                                ITelescopeMediator telescopeMediator,
+                                ISafetyMonitorMediator safetyMonitorMediator,
+                                IDomeMediator domeMediator,
+                                IFocuserMediator focuserMediator,
+                                IGuiderMediator guiderMediator,
+                                ICameraMediator cameraMediator,
+                                ISequenceMediator sequenceMediator) {
 
             if (Settings.Default.UpdateSettings) {
                 Settings.Default.Upgrade();
@@ -37,6 +50,18 @@ namespace DeepSkyLog.NINAPlugin {
                 CoreUtil.SaveSettings(Settings.Default);
             }
             new DeepSkyLogWatcher(imageSaveMediator);
+
+            // Live session telemetry. Wrapped because a failure to attach to a mediator must not
+            // take down the plugin — frame uploads are the primary job and have to keep working.
+            try {
+                _telemetryCollector = new TelemetryCollector(telescopeMediator, safetyMonitorMediator,
+                    domeMediator, focuserMediator, guiderMediator, cameraMediator, sequenceMediator,
+                    imageSaveMediator);
+                _telemetryUploader = new TelemetryUploader(_telemetryCollector);
+                _telemetryUploader.Start();
+            } catch (Exception ex) {
+                Logger.Warning($"DeepSkyLog live telemetry unavailable: {ex.Message}");
+            }
 
             // Initialize authentication service
             _authService = new AuthenticationService();
@@ -221,6 +246,34 @@ namespace DeepSkyLog.NINAPlugin {
                 Settings.Default.Save();
                 RaisePropertyChanged();
             }
+        }
+
+        public bool DeepSkyLogTelemetryEnabled {
+            get => Settings.Default.DeepSkyLogTelemetryEnabled;
+            set {
+                Settings.Default.DeepSkyLogTelemetryEnabled = value;
+                Settings.Default.Save();
+                RaisePropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// Clamped to the same 5–300s range the uploader enforces, so a typo in the options box
+        /// cannot turn the plugin into a request flood or silence it for an hour.
+        /// </summary>
+        public int DeepSkyLogTelemetryIntervalSeconds {
+            get => Settings.Default.DeepSkyLogTelemetryIntervalSeconds;
+            set {
+                Settings.Default.DeepSkyLogTelemetryIntervalSeconds = Math.Min(Math.Max(value, 5), 300);
+                Settings.Default.Save();
+                RaisePropertyChanged();
+            }
+        }
+
+        public override Task Teardown() {
+            _telemetryUploader?.Dispose();
+            _telemetryCollector?.Dispose();
+            return base.Teardown();
         }
 
         public ObservableCollection<DeepSkyLogWatcher.Location> Locations => _locations;
