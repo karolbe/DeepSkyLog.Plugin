@@ -50,6 +50,28 @@
                           IsChecked="{Binding DeepSkyLogAllowSnapshots}" />
             </StackPanel>
 
+            <!-- Live session telemetry -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Report Every (s)">
+                    <TextBlock.ToolTip>
+                        Live session data (mount pointing, safety monitor, roof state,
+                        autofocus runs, guiding) is sent to DeepSkyLog while a sequence is
+                        running, and shown on the Live page in the web app. No images are
+                        uploaded, and nothing is sent unless you are signed in.
+                        This sets how often it is sent, in seconds; 10 is a good default,
+                        and values outside 5-300 are clamped.
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <TextBox Width="50"
+                         Margin="10,0,0,0"
+                         VerticalAlignment="Center"
+                         Text="{Binding DeepSkyLogTelemetryIntervalSeconds, UpdateSourceTrigger=LostFocus}" />
+            </StackPanel>
+
             <!-- Authentication Section -->
             <StackPanel Margin="0,0,0,10"
                         Orientation="Horizontal">
@@ -164,6 +186,51 @@
                           Margin="10,0,0,0"
                           ItemsSource="{Binding Equipment}"
                           SelectedItem="{Binding SelectedEquipment}" />
+            </StackPanel>
+
+            <!-- Stale selection warning. A deleted location/equipment leaves the dropdowns above
+                 simply blank, while uploads keep sending the old ID and are rejected. -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal"
+                        Visibility="{Binding SelectionWarning, Converter={StaticResource NullOrEmptyToVisibilityConverter}}">
+                <TextBlock Width="150" />
+                <TextBlock Margin="10,0,0,0"
+                           Foreground="OrangeRed"
+                           Text="{Binding SelectionWarning}"
+                           TextWrapping="Wrap"
+                           MaxWidth="350" />
+            </StackPanel>
+
+            <!-- Update notice. NINA installs plugins, so this only tells the user that a newer
+                 build exists and points them at the Plugin Manager. Gold rather than OrangeRed:
+                 unless uploads are already being refused, nothing is broken yet. -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal"
+                        Visibility="{Binding UpdateNotice, Converter={StaticResource NullOrEmptyToVisibilityConverter}}">
+                <TextBlock Width="150" />
+                <TextBlock Margin="10,0,0,0"
+                           Foreground="Gold"
+                           Text="{Binding UpdateNotice}"
+                           TextWrapping="Wrap"
+                           MaxWidth="350" />
+            </StackPanel>
+
+            <!-- Parked uploads. Rejected frames are kept on disk; replaying them is deliberately a
+                 button rather than a side effect of changing the dropdowns, so a mis-selection
+                 cannot ship the backlog to the wrong equipment before the user corrects it. -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal"
+                        Visibility="{Binding ParkedUploadsLabel, Converter={StaticResource NullOrEmptyToVisibilityConverter}}">
+                <TextBlock Width="150" />
+                <Button Margin="10,0,0,0"
+                        Padding="10,5"
+                        Content="{Binding ParkedUploadsLabel}"
+                        Command="{Binding RetryParkedUploadsCommand}">
+                    <Button.ToolTip>
+                        Uploads rejected by the server are kept locally. Once your location and
+                        equipment selection is correct, this sends them again.
+                    </Button.ToolTip>
+                </Button>
             </StackPanel>
 
             <!-- Refresh Button -->

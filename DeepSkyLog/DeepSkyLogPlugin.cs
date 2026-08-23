@@ -1,8 +1,10 @@
 using DeepSkyLog.NINAPlugin.Properties;
 using NINA.Core.Utility;
+using NINA.Equipment.Interfaces.Mediator;
 using NINA.Plugin;
 using NINA.Plugin.Interfaces;
 using NINA.Profile.Interfaces;
+using NINA.Sequencer.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.ViewModel;
 using System.ComponentModel;
@@ -23,13 +25,27 @@ namespace DeepSkyLog.NINAPlugin {
         private ObservableCollection<DeepSkyLogWatcher.Equipment> _equipment = new ObservableCollection<DeepSkyLogWatcher.Equipment>();
         private DeepSkyLogWatcher.Location _selectedLocation;
         private DeepSkyLogWatcher.Equipment _selectedEquipment;
+        private string _parkedUploadsLabel;
         private readonly AuthenticationService _authService;
+        private readonly TelemetryCollector _telemetryCollector;
+        private readonly TelemetryUploader _telemetryUploader;
         private bool _isAuthenticating;
         private string _authStatusMessage;
         private string _authenticatedUsername;
+        private string _selectionWarning;
+        private string _updateNotice;
 
         [ImportingConstructor]
-        public DeepSkyLogPlugin(IProfileService profileService, IImageSaveMediator imageSaveMediator, IImageHistoryVM imageHistory) {
+        public DeepSkyLogPlugin(IProfileService profileService,
+                                IImageSaveMediator imageSaveMediator,
+                                IImageHistoryVM imageHistory,
+                                ITelescopeMediator telescopeMediator,
+                                ISafetyMonitorMediator safetyMonitorMediator,
+                                IDomeMediator domeMediator,
+                                IFocuserMediator focuserMediator,
+                                IGuiderMediator guiderMediator,
+                                ICameraMediator cameraMediator,
+                                ISequenceMediator sequenceMediator) {
 
             if (Settings.Default.UpdateSettings) {
                 Settings.Default.Upgrade();
@@ -37,6 +53,22 @@ namespace DeepSkyLog.NINAPlugin {
                 CoreUtil.SaveSettings(Settings.Default);
             }
             new DeepSkyLogWatcher(imageSaveMediator);
+            DeepSkyLogWatcher.UploadRejected += OnUploadRejected;
+            DeepSkyLogWatcher.UploadSucceeded += OnUploadSucceeded;
+
+            // Live session telemetry. Wrapped because a failure to attach to a mediator must not
+            // take down the plugin — frame uploads are the primary job and have to keep working.
+            try {
+                _telemetryCollector = new TelemetryCollector(telescopeMediator, safetyMonitorMediator,
+                    domeMediator, focuserMediator, guiderMediator, cameraMediator, sequenceMediator,
+                    imageSaveMediator, imageHistory);
+                _telemetryUploader = new TelemetryUploader(_telemetryCollector);
+                _telemetryUploader.Start();
+            } catch (Exception ex) {
+                // Log the whole exception: a bare Message here hid a NullReferenceException with no
+                // indication of where it came from.
+                Logger.Error("DeepSkyLog live telemetry unavailable", ex);
+            }
 
             // Initialize authentication service
             _authService = new AuthenticationService();
@@ -48,6 +80,8 @@ namespace DeepSkyLog.NINAPlugin {
             LogoutCommand = new RelayCommand(ExecuteLogout, CanExecuteLogout);
             OpenWebAppCommand = new RelayCommand(ExecuteOpenWebApp);
             RefreshCommand = new RelayCommand(ExecuteRefresh, CanExecuteRefresh);
+            RetryParkedUploadsCommand = new RelayCommand(ExecuteRetryParkedUploads);
+            RefreshParkedUploads();
 
             // Initialize collections with empty placeholder items
             _locations.Add(new DeepSkyLogWatcher.Location { Id = 0, Name = "Select Location..." });
@@ -57,6 +91,10 @@ namespace DeepSkyLog.NINAPlugin {
             if (IsAuthenticated) {
                 Task.Run(ValidateAndLoadDataAsync);
             }
+
+            // Independent of sign-in: an outdated plugin is worth reporting even to a user who has
+            // not connected an account yet, and the manifest endpoint needs no token.
+            Task.Run(CheckForUpdateAsync);
         }
 
         private async Task ValidateAndLoadDataAsync() {
@@ -89,6 +127,7 @@ namespace DeepSkyLog.NINAPlugin {
         public ICommand LogoutCommand { get; }
         public ICommand OpenWebAppCommand { get; }
         public ICommand RefreshCommand { get; }
+        public ICommand RetryParkedUploadsCommand { get; }
 
         public bool IsAuthenticated => !string.IsNullOrEmpty(DeepSkyLogKey);
 
@@ -223,16 +262,64 @@ namespace DeepSkyLog.NINAPlugin {
             }
         }
 
+        /// <summary>
+        /// Clamped to the same 5–300s range the uploader enforces, so a typo in the options box
+        /// cannot turn the plugin into a request flood or silence it for an hour.
+        /// </summary>
+        public int DeepSkyLogTelemetryIntervalSeconds {
+            get => Settings.Default.DeepSkyLogTelemetryIntervalSeconds;
+            set {
+                Settings.Default.DeepSkyLogTelemetryIntervalSeconds = Math.Min(Math.Max(value, 5), 300);
+                Settings.Default.Save();
+                RaisePropertyChanged();
+            }
+        }
+
+        public override Task Teardown() {
+            DeepSkyLogWatcher.UploadRejected -= OnUploadRejected;
+            DeepSkyLogWatcher.UploadSucceeded -= OnUploadSucceeded;
+            _telemetryUploader?.Dispose();
+            _telemetryCollector?.Dispose();
+            return base.Teardown();
+        }
+
         public ObservableCollection<DeepSkyLogWatcher.Location> Locations => _locations;
         public ObservableCollection<DeepSkyLogWatcher.Equipment> Equipment => _equipment;
+
+        /// <summary>
+        /// Set when a saved location/equipment ID no longer resolves against the account, so the
+        /// options page can say so instead of just showing an empty dropdown.
+        /// </summary>
+        public string SelectionWarning {
+            get => _selectionWarning;
+            private set {
+                _selectionWarning = value;
+                RaisePropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// Set when DeepSkyLog has published a newer build of this plugin, so the options page can
+        /// say so. NINA installs plugins, not us, so this is a notice and nothing more.
+        /// </summary>
+        public string UpdateNotice {
+            get => _updateNotice;
+            private set {
+                _updateNotice = value;
+                RaisePropertyChanged();
+            }
+        }
 
         public DeepSkyLogWatcher.Location SelectedLocation {
             get => _selectedLocation ?? _locations.FirstOrDefault(l => l.Id == Settings.Default.SelectedLocationId);
             set {
                 _selectedLocation = value;
-                if (value != null) {
+                // Only a genuine change counts: WPF re-coerces the selection when the list
+                // refreshes, and that must not clear a warning the user has not acted on.
+                if (value != null && value.Id != Settings.Default.SelectedLocationId) {
                     Settings.Default.SelectedLocationId = value.Id;
                     Settings.Default.Save();
+                    OnSelectionChanged();
                 }
                 RaisePropertyChanged();
             }
@@ -242,12 +329,98 @@ namespace DeepSkyLog.NINAPlugin {
             get => _selectedEquipment ?? _equipment.FirstOrDefault(e => e.Id == Settings.Default.SelectedEquipmentId);
             set {
                 _selectedEquipment = value;
-                if (value != null) {
+                if (value != null && value.Id != Settings.Default.SelectedEquipmentId) {
                     Settings.Default.SelectedEquipmentId = value.Id;
                     Settings.Default.Save();
+                    OnSelectionChanged();
                 }
                 RaisePropertyChanged();
             }
+        }
+
+        /// <summary>
+        /// Changing the selection clears the warning but deliberately does NOT replay the parked
+        /// uploads — replaying on a dropdown change meant one mis-click shipped the backlog to the
+        /// wrong equipment before the user could correct it. Replay is the button below, an
+        /// explicit act taken after the user has seen what is selected.
+        /// </summary>
+        private void OnSelectionChanged() {
+            SelectionWarning = null;
+            RefreshParkedUploads();
+        }
+
+        /// <summary>Null when nothing is parked, which hides the retry button entirely.</summary>
+        public string ParkedUploadsLabel {
+            get => _parkedUploadsLabel;
+            private set {
+                _parkedUploadsLabel = value;
+                RaisePropertyChanged();
+            }
+        }
+
+        private void RefreshParkedUploads() {
+            int count = DeepSkyLogWatcher.CountParkedUploads();
+            string label = count > 0
+                ? $"Retry {count} parked upload{(count == 1 ? "" : "s")} with the selection above"
+                : null;
+            Application.Current?.Dispatcher?.Invoke(() => ParkedUploadsLabel = label);
+        }
+
+        private void ExecuteRetryParkedUploads(object parameter) {
+            Task.Run(async () => {
+                try {
+                    await DeepSkyLogWatcher.RetryParkedUploadsAsync();
+                } catch (Exception ex) {
+                    Logger.Error("DeepSkyLog retry of parked uploads failed", ex);
+                } finally {
+                    RefreshParkedUploads();
+                }
+            });
+        }
+
+        /// <summary>
+        /// A live rejection, surfaced two ways: red text on the options page (persists until fixed)
+        /// and a NINA notification bubble (catches the user who is not looking at the options).
+        /// The bubble fires only when the warning transitions from clear to set — a night of
+        /// rejected frames is one toast, not hundreds — and re-arms when the user changes their
+        /// selection, so a fix that did not take produces a fresh one.
+        /// </summary>
+        private void OnUploadRejected(string serverMessage) {
+            bool firstSinceClear = string.IsNullOrEmpty(_selectionWarning);
+
+            string warning = $"DeepSkyLog rejected the last upload: {serverMessage} " +
+                             "Frames are kept locally — check your location and equipment below, " +
+                             "then use the retry button to send them.";
+            Application.Current?.Dispatcher?.Invoke(() => SelectionWarning = warning);
+            RefreshParkedUploads();
+
+            if (firstSinceClear) {
+                NINA.Core.Utility.Notification.Notification.ShowError(
+                    $"DeepSkyLog rejected an upload: {serverMessage} " +
+                    "Frames are kept locally — check your location and equipment selection in the plugin options.");
+            }
+        }
+
+        /// <summary>
+        /// Reports a newer published build, once, on startup.
+        /// </summary>
+        /// <remarks>
+        /// A warning rather than an error: unless the build is below the server's floor nothing is
+        /// broken yet, and the toast exists to catch the user who never opens the plugin options.
+        /// </remarks>
+        private async Task CheckForUpdateAsync() {
+            string notice = await UpdateCheckService.CheckAsync();
+            if (string.IsNullOrEmpty(notice)) return;
+
+            Logger.Info($"DeepSkyLog: {notice}");
+            Application.Current?.Dispatcher?.Invoke(() => UpdateNotice = notice);
+            NINA.Core.Utility.Notification.Notification.ShowWarning(notice);
+        }
+
+        /// <summary>A delivered upload proves the selection works, so any stale warning comes down.</summary>
+        private void OnUploadSucceeded() {
+            if (string.IsNullOrEmpty(_selectionWarning)) return;
+            Application.Current?.Dispatcher?.Invoke(() => SelectionWarning = null);
         }
 
         private async Task LoadDataAsync() {
@@ -275,6 +448,10 @@ namespace DeepSkyLog.NINAPlugin {
                     RaisePropertyChanged(nameof(Equipment));
                     RaisePropertyChanged(nameof(SelectedLocation));
                     RaisePropertyChanged(nameof(SelectedEquipment));
+
+                    // A saved ID that is no longer in the account leaves the dropdown blank but
+                    // keeps being sent on every upload — say so rather than letting it look unset.
+                    SelectionWarning = DeepSkyLogWatcher.ValidateSelectedIds(locations, equipments);
                 });
             } catch (Exception ex) {
                 Logger.Debug($"Failed to load locations/equipment: {ex.Message}");

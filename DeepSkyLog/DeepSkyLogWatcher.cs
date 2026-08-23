@@ -1,4 +1,4 @@
-﻿using DeepSkyLog.NINAPlugin.Properties;
+using DeepSkyLog.NINAPlugin.Properties;
 using Namotion.Reflection;
 using Newtonsoft.Json;
 using NINA.Core.Enum;
@@ -21,11 +21,70 @@ using static NINA.Equipment.Model.CaptureSequence;
 
 namespace DeepSkyLog.NINAPlugin {
 
+    /// <summary>
+    /// How the server answered an upload, and therefore what to do with the payload.
+    /// </summary>
+    public enum UploadResult {
+        /// <summary>Stored (or already known). Drop the local copy.</summary>
+        Success,
+
+        /// <summary>Network error, timeout, throttling or a server fault. Worth retrying as-is.</summary>
+        Transient,
+
+        /// <summary>
+        /// The server rejected the payload or the account — a stale equipment/location, an
+        /// expired subscription, a malformed body. Re-sending the identical request can only fail
+        /// again, so it must not go back on the retry queue.
+        /// </summary>
+        Rejected,
+
+        /// <summary>
+        /// The endpoint or the credentials are the problem, not the payload: the route does not
+        /// exist on this server (404) or the token is no longer accepted (401).
+        ///
+        /// <para>Kept distinct from <see cref="Rejected"/> because the data is perfectly good and
+        /// will upload once the deploy lands or the user signs in again. Treating these as
+        /// "delivered" is how telemetry silently discarded every batch while reporting success.</para>
+        /// </summary>
+        Unavailable
+    }
+
     public class DeepSkyLogWatcher {
-        private static readonly HttpClient client = new ();
+        // 30s to match the telemetry uploader; the default 100s let a black-holed connection stall
+        // a retry pass for most of two minutes.
+        private static readonly HttpClient client =
+            new HttpClient { Timeout = TimeSpan.FromSeconds(30) }.WithIdentity();
         private static readonly string TempFolderPath = Path.GetTempPath();
         private static readonly ConcurrentQueue<string> retryQueue = new ();
         private static readonly SemaphoreSlim retrySemaphore = new(1, 1);
+
+        private const string PendingPrefix = "dsl_request_";
+        private const string RejectedPrefix = "dsl_rejected_";
+
+        /// <summary>
+        /// Ceiling on how many queued payloads one retry pass will attempt. A pass runs per saved
+        /// frame, so without a cap a long backlog turns every exposure into a burst of requests.
+        /// </summary>
+        private const int MaxRetriesPerPass = 50;
+
+        /// <summary>
+        /// A retry pass runs once per saved frame. That is harmless when the server is up, but with
+        /// the link down it means every exposure fires another <see cref="MaxRetriesPerPass"/>
+        /// doomed requests — a night of imaging becomes tens of thousands of failed calls from one
+        /// rig alone. After a failing pass the next one is pushed out exponentially instead.
+        /// </summary>
+        private const int RetryBackoffBaseSeconds = 60;
+        private const int RetryBackoffMaxSeconds = 1800;
+
+        /// <summary>
+        /// Pending payloads are dropped once they are this old. A rig that is offline for weeks
+        /// should not accumulate an unbounded spool that it then dumps on the server all at once.
+        /// </summary>
+        private const int PendingMaxAgeDays = 14;
+
+        private static readonly Random retryJitter = new();
+        private static DateTime nextRetryAllowedUtc = DateTime.MinValue;
+        private static int consecutiveRetryFailures;
 
         public DeepSkyLogWatcher(IImageSaveMediator imageSaveMediator) {
             imageSaveMediator.ImageSaved += ImageSaveMeditator_ImageSaved;
@@ -94,15 +153,113 @@ namespace DeepSkyLog.NINAPlugin {
                 Logger.Debug($"Using location ID: {locationId}, equipment ID: {equipmentId}");
 
                 // Try posting the data with location and equipment parameters
-                if (!await TryPostToServerAsync(json, locationId, equipmentId)) {
-                    SaveFailedRequest(tempFilePath, json);
+                switch (await TryPostToServerAsync(json, locationId, equipmentId)) {
+                    case UploadResult.Transient:
+                    case UploadResult.Unavailable:
+                        // Good payload, unreachable or unauthenticated server. Spool it: a deploy
+                        // or a fresh sign-in makes it uploadable without the user doing anything.
+                        SaveFailedRequest(tempFilePath, json);
+                        break;
+
+                    case UploadResult.Rejected:
+                        QuarantineRequest(tempFilePath, json);
+                        break;
                 }
             } catch (Exception ex) {
                 Logger.Debug($"Unexpected error in ProcessImageSave: {ex.Message}");
             }
         }
 
-        private static async Task<bool> TryPostToServerAsync(string json, string locationId = null, string equipmentId = null) {
+        /// <summary>
+        /// Decide whether a failed status code is worth retrying.
+        ///
+        /// <para>Everything used to be retried forever, which turned a permanent rejection — a
+        /// deleted equipment, a lapsed subscription — into an unbounded loop: one more queued file
+        /// per captured frame, with the whole queue replayed on every subsequent frame.</para>
+        /// </summary>
+        internal static UploadResult Classify(System.Net.HttpStatusCode status) {
+            int code = (int)status;
+
+            // Throttling and timeouts are 4xx but explicitly mean "try again later".
+            if (status == System.Net.HttpStatusCode.RequestTimeout ||
+                code == 429) {
+                return UploadResult.Transient;
+            }
+
+            // Server-side faults: the payload is fine, the far end is not.
+            if (code >= 500) {
+                return UploadResult.Transient;
+            }
+
+            // Not the payload's fault: the route is missing on this server, or the token has
+            // stopped being accepted. Both fix themselves without the caller changing anything.
+            if (code == 401 || code == 404) {
+                return UploadResult.Unavailable;
+            }
+
+            // 426: this plugin build is below the version the server will accept. Retrying cannot
+            // help, but the frames are perfectly good — quarantining them means the user can replay
+            // the queue from the options page once they have updated, rather than losing the night.
+            if (code == 426) {
+                return UploadResult.Rejected;
+            }
+
+            // Any other 4xx is about this request and will not fix itself.
+            if (code >= 400) {
+                return UploadResult.Rejected;
+            }
+
+            return UploadResult.Transient;
+        }
+
+        /// <summary>
+        /// Raised when the server refuses an upload outright — most often a location or equipment
+        /// that no longer exists in the account. Until now that verdict lived only in the log; this
+        /// lets the options page and a NINA notification put it in front of the user, whose action
+        /// (re-selecting in the options) is the only thing that can fix it.
+        /// </summary>
+        public static event Action<string> UploadRejected;
+
+        /// <summary>Raised on a delivered upload, so a stale-selection warning can clear itself.</summary>
+        public static event Action UploadSucceeded;
+
+        /// <summary>How many rejected payloads are parked on disk waiting for the user to retry.</summary>
+        public static int CountParkedUploads() {
+            try {
+                return Directory.GetFiles(TempFolderPath, RejectedPrefix + "*.json").Length;
+            } catch (Exception) {
+                return 0;
+            }
+        }
+
+        /// <summary>
+        /// User-initiated replay of the parked uploads. Deliberately the only path that requeues
+        /// them: replaying as a side effect of a dropdown change meant one mis-click shipped the
+        /// whole backlog to the wrong equipment before the user could correct it. An explicit
+        /// action also resets the retry cooldown — the user just asked, so answer now — and works
+        /// with no session running, when there is no frame save to piggyback on.
+        /// </summary>
+        public static async Task RetryParkedUploadsAsync() {
+            RequeueRejectedRequests();
+            nextRetryAllowedUtc = DateTime.MinValue;
+            consecutiveRetryFailures = 0;
+            await RetryFailedRequestsAsync();
+        }
+
+        private static void RaiseUploadOutcome(string rejectionMessage) {
+            // Subscriber faults must not surface into the upload path.
+            try {
+                if (rejectionMessage == null) {
+                    UploadSucceeded?.Invoke();
+                } else {
+                    UploadRejected?.Invoke(rejectionMessage);
+                }
+            } catch (Exception ex) {
+                Logger.Debug($"DeepSkyLog upload-outcome notification failed: {ex.Message}");
+            }
+        }
+
+        private static async Task<UploadResult> TryPostToServerAsync(string json, string locationId = null, string equipmentId = null) {
             try {
                 Logger.Debug($"Preparing server request: {json}");
 
@@ -126,15 +283,45 @@ namespace DeepSkyLog.NINAPlugin {
                 Logger.Debug($"Server response: {response.StatusCode}");
 
                 if (response.IsSuccessStatusCode) {
-                    return true;
-                } else {
-                    string responseContent = await response.Content.ReadAsStringAsync();
-                    Logger.Debug($"Server responded with: {response.StatusCode} - {responseContent}");
+                    RaiseUploadOutcome(null);
+                    return UploadResult.Success;
                 }
+
+                string responseContent = await response.Content.ReadAsStringAsync();
+                UploadResult result = Classify(response.StatusCode);
+
+                if (result == UploadResult.Rejected) {
+                    // Surfaced at Error, not Debug: this is the only place the user is told what
+                    // to actually do (e.g. "Re-select your equipment and location in the plugin
+                    // settings"), and Debug logging is off for most people.
+                    Logger.Error($"DeepSkyLog rejected the upload ({(int)response.StatusCode} {response.StatusCode}): {DescribeError(responseContent)}");
+                    RaiseUploadOutcome(DescribeError(responseContent));
+                } else if (result == UploadResult.Unavailable) {
+                    Logger.Error($"DeepSkyLog is not accepting uploads ({(int)response.StatusCode} {response.StatusCode}): {DescribeError(responseContent)}. "
+                                 + "Frames are being kept locally and will upload once this clears — sign in again if it persists.");
+                } else {
+                    Logger.Warning($"DeepSkyLog upload failed, will retry ({(int)response.StatusCode} {response.StatusCode}): {DescribeError(responseContent)}");
+                }
+                return result;
             } catch (Exception ex) {
-                Logger.Debug($"Error posting data: {ex.Message}");
+                Logger.Warning($"Error posting data, will retry: {ex.Message}");
             }
-            return false;
+            return UploadResult.Transient;
+        }
+
+        /// <summary>Pull the human-readable message out of the API error envelope, if there is one.</summary>
+        private static string DescribeError(string responseContent) {
+            try {
+                var error = JsonConvert.DeserializeObject<ApiErrorResponse>(responseContent);
+                if (!string.IsNullOrWhiteSpace(error?.Message)) {
+                    return string.IsNullOrWhiteSpace(error.Error)
+                        ? error.Message
+                        : $"{error.Error} - {error.Message}";
+                }
+            } catch (Exception) {
+                // Not our envelope; fall through to the raw body.
+            }
+            return string.IsNullOrWhiteSpace(responseContent) ? "(no response body)" : responseContent;
         }
 
         private static void SaveFailedRequest(string filePath, string json) {
@@ -143,7 +330,57 @@ namespace DeepSkyLog.NINAPlugin {
                 retryQueue.Enqueue(filePath);
                 Logger.Debug($"Failed request saved to {filePath} for retry.");
             } catch (Exception ex) {
-                Logger.Debug($"Error saving failed request: {ex.Message}");
+                Logger.Warning($"Error saving failed request: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// Park a rejected payload under a name the retry scan ignores.
+        ///
+        /// <para>Kept on disk rather than deleted: the usual cause is a fixable misconfiguration,
+        /// and <see cref="RetryParkedUploadsAsync"/> puts these back in the queue when the user
+        /// clicks the retry button in the options after fixing their selection.</para>
+        /// </summary>
+        private static void QuarantineRequest(string filePath, string json) {
+            try {
+                string rejectedPath = ToRejectedPath(filePath);
+                File.WriteAllText(rejectedPath, json);
+                if (!string.Equals(rejectedPath, filePath, StringComparison.OrdinalIgnoreCase) && File.Exists(filePath)) {
+                    File.Delete(filePath);
+                }
+                Logger.Warning($"Upload parked at {rejectedPath}; it will be retried if you change your DeepSkyLog location or equipment.");
+            } catch (Exception ex) {
+                Logger.Warning($"Error parking rejected request: {ex.Message}");
+            }
+        }
+
+        private static string ToRejectedPath(string pendingPath) {
+            string name = Path.GetFileName(pendingPath);
+            if (name.StartsWith(PendingPrefix, StringComparison.OrdinalIgnoreCase)) {
+                name = RejectedPrefix + name.Substring(PendingPrefix.Length);
+            }
+            return Path.Combine(TempFolderPath, name);
+        }
+
+        /// <summary>
+        /// Move parked payloads back onto the retry queue. Called when the user picks a different
+        /// location or equipment — the most likely fix for whatever the server objected to.
+        /// </summary>
+        public static void RequeueRejectedRequests() {
+            try {
+                int restored = 0;
+                foreach (string rejectedPath in Directory.GetFiles(TempFolderPath, RejectedPrefix + "*.json")) {
+                    string name = Path.GetFileName(rejectedPath);
+                    string pendingPath = Path.Combine(TempFolderPath, PendingPrefix + name.Substring(RejectedPrefix.Length));
+                    File.Move(rejectedPath, pendingPath, true);
+                    restored++;
+                }
+
+                if (restored > 0) {
+                    Logger.Info($"DeepSkyLog: re-queued {restored} previously rejected upload(s) after a settings change.");
+                }
+            } catch (Exception ex) {
+                Logger.Warning($"Error re-queueing rejected requests: {ex.Message}");
             }
         }
 
@@ -153,24 +390,110 @@ namespace DeepSkyLog.NINAPlugin {
             }
 
             try {
-                foreach (string filePath in Directory.GetFiles(TempFolderPath, "dsl_request_*.json")) {
+                if (DateTime.UtcNow < nextRetryAllowedUtc) {
+                    return; // Still cooling down from a failed pass.
+                }
+
+                // Rebuild from disk each pass. The per-pass cap means entries can be left over,
+                // and the scan re-adds every file, so without this the queue grows without bound.
+                while (retryQueue.TryDequeue(out _)) { }
+
+                foreach (string filePath in Directory.GetFiles(TempFolderPath, PendingPrefix + "*.json")) {
+                    if (TryExpirePending(filePath)) {
+                        continue;
+                    }
                     retryQueue.Enqueue(filePath);
                 }
 
                 // Get current selected location and equipment IDs for retries
                 var (locationId, equipmentId) = GetSelectedIds();
 
-                while (retryQueue.TryDequeue(out string filePath)) {
+                int attempted = 0;
+                int rejected = 0;
+                bool transientFailure = false;
+
+                while (attempted < MaxRetriesPerPass && retryQueue.TryDequeue(out string filePath)) {
+                    if (!File.Exists(filePath)) {
+                        continue; // Already handled by an earlier pass.
+                    }
+
                     string json = File.ReadAllText(filePath);
-                    if (await TryPostToServerAsync(json, locationId, equipmentId)) {
-                        File.Delete(filePath);
-                        Logger.Debug($"Retried request successfully sent and removed {filePath}.");
+                    attempted++;
+
+                    switch (await TryPostToServerAsync(json, locationId, equipmentId)) {
+                        case UploadResult.Success:
+                            File.Delete(filePath);
+                            Logger.Debug($"Retried request successfully sent and removed {filePath}.");
+                            break;
+
+                        case UploadResult.Rejected:
+                            // Park it so the next frame does not replay the same doomed request.
+                            QuarantineRequest(filePath, json);
+                            rejected++;
+                            break;
+
+                        case UploadResult.Unavailable:
+                            // Leave it pending — the payload is fine and the server will take it
+                            // once it is back. Backs off on the same curve as a transient failure.
+                            transientFailure = true;
+                            break;
+
+                        case UploadResult.Transient:
+                            // Leave the file in place; the next pass picks it up again. Stop here
+                            // rather than working through the backlog: the link is down, and the
+                            // remaining files would just be another 49 failed requests.
+                            transientFailure = true;
+                            break;
+                    }
+
+                    if (transientFailure) {
+                        break;
                     }
                 }
+
+                UpdateRetryBackoff(transientFailure);
+
+                if (rejected > 0) {
+                    Logger.Error($"DeepSkyLog: {rejected} upload(s) were rejected and are not being retried. Check your location and equipment selection in the plugin options.");
+                }
             } catch (Exception ex) {
-                Logger.Debug($"Error during retry process: {ex.Message}");
+                Logger.Warning($"Error during retry process: {ex.Message}");
             } finally {
                 retrySemaphore.Release();
+            }
+        }
+
+        /// <summary>
+        /// Pushes the next retry pass out after a failed one, and pulls it back in as soon as a pass
+        /// gets through. Jittered so rigs that all lost the same server do not return in lockstep.
+        /// </summary>
+        private static void UpdateRetryBackoff(bool transientFailure) {
+            if (!transientFailure) {
+                consecutiveRetryFailures = 0;
+                nextRetryAllowedUtc = DateTime.MinValue;
+                return;
+            }
+
+            consecutiveRetryFailures++;
+            int backoff = Math.Min(RetryBackoffBaseSeconds * (1 << Math.Min(consecutiveRetryFailures - 1, 5)),
+                                   RetryBackoffMaxSeconds);
+            backoff += retryJitter.Next(0, Math.Max(1, backoff / 4));
+            nextRetryAllowedUtc = DateTime.UtcNow.AddSeconds(backoff);
+            Logger.Debug($"DeepSkyLog retry pass backing off for {backoff}s");
+        }
+
+        /// <summary>Deletes a pending payload that is too old to be worth sending. </summary>
+        private static bool TryExpirePending(string filePath) {
+            try {
+                if (File.GetLastWriteTimeUtc(filePath) >= DateTime.UtcNow.AddDays(-PendingMaxAgeDays)) {
+                    return false;
+                }
+                File.Delete(filePath);
+                Logger.Warning($"DeepSkyLog dropped a pending upload older than {PendingMaxAgeDays} days: {filePath}");
+                return true;
+            } catch (Exception ex) {
+                Logger.Debug($"Could not expire pending upload {filePath}: {ex.Message}");
+                return false;
             }
         }
 
@@ -247,6 +570,38 @@ namespace DeepSkyLog.NINAPlugin {
 
             Logger.Debug($"GetSelectedIds returning: location='{locationId}', equipment='{equipmentId}'");
             return (locationId, equipmentId);
+        }
+
+        /// <summary>
+        /// Check the saved location/equipment IDs against what the account actually has.
+        ///
+        /// <para>The options dropdowns resolve the saved ID against the fetched list, so a deleted
+        /// entry simply renders blank — but uploads keep sending the saved ID, because that is read
+        /// straight from settings. The result is a selector that looks merely unset while every
+        /// frame is being rejected. This turns that into an explicit message.</para>
+        /// </summary>
+        /// <returns>A warning to show the user, or null when both selections resolve.</returns>
+        public static string ValidateSelectedIds(List<Location> locations, List<Equipment> equipments) {
+            var problems = new List<string>();
+
+            int locationId = Settings.Default.SelectedLocationId;
+            if (locationId > 0 && locations != null && !locations.Any(l => l.Id == locationId)) {
+                problems.Add($"location {locationId}");
+            }
+
+            int equipmentId = Settings.Default.SelectedEquipmentId;
+            if (equipmentId > 0 && equipments != null && !equipments.Any(e => e.Id == equipmentId)) {
+                problems.Add($"equipment {equipmentId}");
+            }
+
+            if (problems.Count == 0) {
+                return null;
+            }
+
+            string warning = $"Your saved {string.Join(" and ", problems)} no longer exists in your DeepSkyLog account. " +
+                             "Pick it again in the plugin options — until then, frames are not being saved.";
+            Logger.Error($"DeepSkyLog: {warning}");
+            return warning;
         }
 
         // Deterministic stand-in for the file content hash when the file can't be read. Derived
