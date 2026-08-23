@@ -16,7 +16,7 @@ namespace DeepSkyLog.NINAPlugin {
 
     public class AuthenticationService {
         private const string BaseUrl = "https://app.deepskylog.space";
-        private static readonly HttpClient _httpClient = new HttpClient();
+        private static readonly HttpClient _httpClient = new HttpClient().WithIdentity();
         private HttpListener _listener;
         private CancellationTokenSource _cts;
         private string _expectedState; // CSRF nonce for the in-flight sign-in attempt
