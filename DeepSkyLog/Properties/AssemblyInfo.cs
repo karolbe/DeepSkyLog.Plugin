@@ -9,8 +9,8 @@ using System.Runtime.InteropServices;
 
 // [MANDATORY] The assembly versioning
 // For local builds, update manually. For CI builds, this is replaced automatically.
-[assembly: AssemblyVersion("1.0.0.0")]
-[assembly: AssemblyFileVersion("1.0.0.0")]
+[assembly: AssemblyVersion("1.0.3.0")]
+[assembly: AssemblyFileVersion("1.0.3.0")]
 
 // [MANDATORY] The name of your plugin
 [assembly: AssemblyTitle("DeepSkyLog")]
@@ -25,8 +25,11 @@ using System.Runtime.InteropServices;
 [assembly: AssemblyProduct("DeepSkyLog")]
 [assembly: AssemblyCopyright("Copyright © 2026 Karol Bryd")]
 
-// The minimum Version of N.I.N.A. that this plugin is compatible with
-[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.0.0.2017")]
+// The minimum Version of N.I.N.A. that this plugin is compatible with.
+// Must match the NINA.Plugin package version referenced in the csproj: NINA's plugin loader
+// resolves this assembly's dependencies by exact version, so a build only loads cleanly on the
+// exact NINA release it was compiled against.
+[assembly: AssemblyMetadata("MinimumApplicationVersion", "3.1.0.9001")]
 
 // The license your plugin code is using
 [assembly: AssemblyMetadata("License", "MPL-2.0")]

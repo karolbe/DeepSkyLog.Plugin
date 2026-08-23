@@ -106,5 +106,29 @@ namespace DeepSkyLog.NINAPlugin.Properties {
                 this["SelectedEquipmentId"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("True")]
+        public bool DeepSkyLogTelemetryEnabled {
+            get {
+                return ((bool)(this["DeepSkyLogTelemetryEnabled"]));
+            }
+            set {
+                this["DeepSkyLogTelemetryEnabled"] = value;
+            }
+        }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("10")]
+        public int DeepSkyLogTelemetryIntervalSeconds {
+            get {
+                return ((int)(this["DeepSkyLogTelemetryIntervalSeconds"]));
+            }
+            set {
+                this["DeepSkyLogTelemetryIntervalSeconds"] = value;
+            }
+        }
     }
 }
