@@ -1,4 +1,4 @@
-using DeepSkyLog.NINAPlugin.Properties;
+﻿using DeepSkyLog.NINAPlugin.Properties;
 using NINA.Core.Utility;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Plugin;
@@ -257,6 +257,19 @@ namespace DeepSkyLog.NINAPlugin {
             get => Settings.Default.DeepSkyLogAllowSnapshots;
             set {
                 Settings.Default.DeepSkyLogAllowSnapshots = value;
+                Settings.Default.Save();
+                RaisePropertyChanged();
+            }
+        }
+
+        /// <summary>
+        /// On by default: flats, darks and biases carry whatever target the loaded sequence names,
+        /// so uploading them files calibration under a real target.
+        /// </summary>
+        public bool DeepSkyLogSkipCalibrationFrames {
+            get => Settings.Default.DeepSkyLogSkipCalibrationFrames;
+            set {
+                Settings.Default.DeepSkyLogSkipCalibrationFrames = value;
                 Settings.Default.Save();
                 RaisePropertyChanged();
             }

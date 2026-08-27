@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Linq;
 using DeepSkyLog.NINAPlugin;
@@ -170,6 +170,65 @@ namespace DeepSkyLog.Plugin.Tests {
         [Fact]
         public void NullInput_ReturnsEmpty() {
             Assert.Equal("", Record().ReformatRA(null));
+        }
+    }
+
+    /// <summary>
+    /// A user's whole morning of flat-darks was uploaded under the previous night's target,
+    /// because the type check that should have caught them sat commented out. These pin the
+    /// decision so it cannot quietly lapse again.
+    /// </summary>
+    public class ShouldUploadImageTypeTests {
+
+        private const bool AllowSnapshots = true;
+        private const bool BlockSnapshots = false;
+        private const bool SkipCalibration = true;
+        private const bool KeepCalibration = false;
+
+        [Theory]
+        [InlineData("LIGHT")]
+        [InlineData("light")]
+        [InlineData("Light")]
+        public void LightsAreAlwaysUploaded(string imageType) {
+            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, SkipCalibration));
+            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType(imageType, AllowSnapshots, KeepCalibration));
+        }
+
+        [Theory]
+        [InlineData("FLAT")]
+        [InlineData("DARK")]
+        [InlineData("BIAS")]
+        public void CalibrationIsSkippedByDefault(string imageType) {
+            Assert.False(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, SkipCalibration));
+        }
+
+        [Theory]
+        [InlineData("FLAT")]
+        [InlineData("DARK")]
+        [InlineData("BIAS")]
+        public void CalibrationIsUploadedWhenTheUserAsksForIt(string imageType) {
+            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, KeepCalibration));
+        }
+
+        [Fact]
+        public void SnapshotsKeepTheirOwnSwitch() {
+            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType("SNAPSHOT", AllowSnapshots, SkipCalibration));
+            Assert.False(DeepSkyLogWatcher.ShouldUploadImageType("SNAPSHOT", BlockSnapshots, SkipCalibration));
+        }
+
+        [Fact]
+        public void SnapshotSwitchIsNotOverriddenByTheCalibrationSwitch() {
+            // Turning calibration back on must not silently start sending snapshots too.
+            Assert.False(DeepSkyLogWatcher.ShouldUploadImageType("SNAPSHOT", BlockSnapshots, KeepCalibration));
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("SOMETHING_NINA_ADDED_LATER")]
+        public void UnclassifiedFramesAreTreatedAsCalibration(string imageType) {
+            Assert.False(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, SkipCalibration));
+            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, KeepCalibration));
         }
     }
 }

@@ -1,4 +1,4 @@
-using DeepSkyLog.NINAPlugin.Properties;
+﻿using DeepSkyLog.NINAPlugin.Properties;
 using Namotion.Reflection;
 using Newtonsoft.Json;
 using NINA.Core.Enum;
@@ -105,10 +105,14 @@ namespace DeepSkyLog.NINAPlugin {
             }
             Logger.Info("DeepSkyLog is enabled");
 
-//            if (msg.MetaData.Image.ImageType != ImageTypes.LIGHT && Settings.Default.DeepSkyLogAllowSnapshots == false) {
-//                Logger.Debug("Image is not a light, skipping...");
-//                return;
-//            }
+            string imageType = msg?.MetaData?.Image?.ImageType;
+            if (!ShouldUploadImageType(imageType,
+                                       Settings.Default.DeepSkyLogAllowSnapshots,
+                                       Settings.Default.DeepSkyLogSkipCalibrationFrames)) {
+                Logger.Info($"DeepSkyLog is not uploading this {imageType ?? "untyped"} frame; " +
+                            "only light frames are sent unless the plugin options say otherwise");
+                return;
+            }
 
             try {
                 Task.Run(() => ProcessImageSave(msg));
@@ -116,6 +120,30 @@ namespace DeepSkyLog.NINAPlugin {
                 Logger.Warning($"session metadata save failed: {e.Message}");
             }
         }
+        /// <summary>
+        /// Whether a frame of this type belongs in DeepSkyLog.
+        /// </summary>
+        /// <remarks>
+        /// Lights are the point of the log. Calibration frames — flat, dark, bias — describe the
+        /// rig rather than the sky, and they carry the target name and coordinates of whichever
+        /// sequence happened to be loaded when they were shot. Uploading them files a morning's
+        /// flats under last night's target, so they are skipped unless the user asks for them.
+        /// Snapshots keep their own long-standing switch.
+        ///
+        /// A frame NINA did not classify is treated the same as calibration: something that cannot
+        /// be identified is not something to file against a project.
+        /// </remarks>
+        internal static bool ShouldUploadImageType(string imageType, bool allowSnapshots,
+                                                   bool skipCalibrationFrames) {
+            if (string.Equals(imageType, ImageTypes.LIGHT, StringComparison.OrdinalIgnoreCase)) {
+                return true;
+            }
+            if (string.Equals(imageType, ImageTypes.SNAPSHOT, StringComparison.OrdinalIgnoreCase)) {
+                return allowSnapshots;
+            }
+            return !skipCalibrationFrames;
+        }
+
         private async Task ProcessImageSave(ImageSavedEventArgs msg) {
             try {
                 // Attempt to retry any failed requests first

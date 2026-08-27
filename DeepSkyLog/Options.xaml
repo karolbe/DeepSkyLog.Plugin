@@ -50,6 +50,27 @@
                           IsChecked="{Binding DeepSkyLogAllowSnapshots}" />
             </StackPanel>
 
+            <!-- Calibration frames -->
+            <StackPanel Margin="0,0,0,5"
+                        Orientation="Horizontal">
+                <TextBlock Width="150"
+                           HorizontalAlignment="Right"
+                           VerticalAlignment="Center"
+                           Text="Skip Calibration">
+                    <TextBlock.ToolTip>
+                        Do not upload flat, dark or bias frames. They describe the rig rather than
+                        the sky, and they carry the target name and coordinates of whichever
+                        sequence was loaded when they were shot — so uploading them files a
+                        morning's flats under last night's target. Leave this on unless you
+                        deliberately want calibration frames in your log.
+                    </TextBlock.ToolTip>
+                </TextBlock>
+                <CheckBox Width="50"
+                          Margin="10,0,0,0"
+                          VerticalAlignment="Center"
+                          IsChecked="{Binding DeepSkyLogSkipCalibrationFrames}" />
+            </StackPanel>
+
             <!-- Live session telemetry -->
             <StackPanel Margin="0,0,0,5"
                         Orientation="Horizontal">
