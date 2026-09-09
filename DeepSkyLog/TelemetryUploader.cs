@@ -60,6 +60,13 @@ namespace DeepSkyLog.NINAPlugin {
             NullValueHandling = NullValueHandling.Ignore
         };
 
+        /// <summary>
+        /// Raised when the server permanently rejects a batch (quota, subscription, malformed). The
+        /// batch is discarded either way — this is purely so the plugin can tell the user why — so
+        /// callers must treat it as informational and never leak into the send path.
+        /// </summary>
+        public static event Action<string> ServerRejected;
+
         private readonly TelemetryCollector collector;
         private readonly string clientVersion;
         private readonly SemaphoreSlim flushGate = new(1, 1);
@@ -85,6 +92,12 @@ namespace DeepSkyLog.NINAPlugin {
         private int consecutiveRejections;
         private long lastEventFlushTicks;
         private int disposed;
+
+        /// <summary>
+        /// Set once the server has said this account's plan does not include live telemetry.
+        /// Static because the verdict is about the account, not about any one uploader instance.
+        /// </summary>
+        private static int subscriptionBlocked;
 
         public TelemetryUploader(TelemetryCollector collector) {
             this.collector = collector;
@@ -147,6 +160,15 @@ namespace DeepSkyLog.NINAPlugin {
             // the token check below means nothing leaves the machine unless the user is signed in.
             if (!Settings.Default.DeepSkyLogEnabled) {
                 ReportIdle("the DeepSkyLog plugin is switched off in its options");
+                return;
+            }
+
+            // The server has already refused this account's telemetry for want of a subscription.
+            // Sending again every interval cannot change that answer: it would only earn another
+            // refusal, another log line and another toast, all night. Cleared if the account is
+            // later seen to have access, so an upgrade takes effect without restarting NINA.
+            if (Volatile.Read(ref subscriptionBlocked) == 1) {
+                ReportIdle("this account's plan does not include live telemetry");
                 return;
             }
 
@@ -246,6 +268,22 @@ namespace DeepSkyLog.NINAPlugin {
                 // malformed or oversized batch (400). Reporting it as delivered is deliberate:
                 // the events are gone either way, and the session should keep reporting.
                 Logger.Warning($"DeepSkyLog rejected a telemetry batch ({(int)response.StatusCode}): {body}");
+
+                // A subscription refusal is the one rejection that will not change on its own, so
+                // it stops the uploader outright rather than being reported over and over. Told to
+                // the user exactly once, on the transition into the blocked state.
+                if (IsSubscriptionRefusal(response.StatusCode, body)) {
+                    if (Interlocked.Exchange(ref subscriptionBlocked, 1) == 0) {
+                        Logger.Info("DeepSkyLog is not sending live telemetry: the account's plan "
+                                    + "does not include it. Sending stops until the plan changes.");
+                        ServerRejected?.Invoke(DeepSkyLogWatcher.DescribeError(body));
+                    }
+                    return UploadResult.Rejected;
+                }
+
+                // The user needs to know when this is a quota decision, not a noise log line.
+                // Surfaced on the UI thread by the subscriber; the batch stays discarded.
+                ServerRejected?.Invoke(DeepSkyLogWatcher.DescribeError(body));
                 return UploadResult.Rejected;
             }
 
@@ -319,6 +357,32 @@ namespace DeepSkyLog.NINAPlugin {
                              + "This usually means the client and server disagree on the batch format.");
             }
             OnFailure();
+        }
+
+        /// <summary>
+        /// Whether a rejection means "your plan does not cover this" rather than "this batch was
+        /// bad". The server answers 403 with SUBSCRIPTION_REQUIRED; the code is matched when the
+        /// envelope parses, and a bare 403 on this route means the same thing either way.
+        /// </summary>
+        private static bool IsSubscriptionRefusal(System.Net.HttpStatusCode status, string body) {
+            if (status != System.Net.HttpStatusCode.Forbidden) {
+                return false;
+            }
+            string code = DeepSkyLogWatcher.ErrorCode(body);
+            return code == null
+                   || string.Equals(code, "SUBSCRIPTION_REQUIRED", StringComparison.OrdinalIgnoreCase);
+        }
+
+        /// <summary>
+        /// Told what the account's plan allows, from the subscription check the plugin runs on load.
+        /// Only ever unblocks: that check reports false for a network error as readily as for a free
+        /// account, and a blip must not be what silences a paying user's telemetry. Blocking is left
+        /// to the server's own refusal, which is never ambiguous.
+        /// </summary>
+        public static void NoteAccess(bool hasAccess) {
+            if (hasAccess && Interlocked.Exchange(ref subscriptionBlocked, 0) == 1) {
+                Logger.Info("DeepSkyLog telemetry re-enabled: the account's plan now includes it.");
+            }
         }
 
         /// <summary>

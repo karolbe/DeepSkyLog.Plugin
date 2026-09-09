@@ -35,6 +35,13 @@ namespace DeepSkyLog.NINAPlugin {
         private string _selectionWarning;
         private string _updateNotice;
 
+        // A server rejection that persists (quota hit, subscription lapsed) otherwise toasts on
+        // every frame or batch. Throttle the toast so the user is told without the plugin turning
+        // into an error-flasher; the options-page banner is refreshed regardless.
+        private static readonly object RejectionToastLock = new();
+        private DateTime _lastRejectionToastUtc = DateTime.MinValue;
+        private const int RejectionToastCooldownSeconds = 60;
+
         [ImportingConstructor]
         public DeepSkyLogPlugin(IProfileService profileService,
                                 IImageSaveMediator imageSaveMediator,
@@ -45,7 +52,11 @@ namespace DeepSkyLog.NINAPlugin {
                                 IFocuserMediator focuserMediator,
                                 IGuiderMediator guiderMediator,
                                 ICameraMediator cameraMediator,
-                                ISequenceMediator sequenceMediator) {
+                                 ISequenceMediator sequenceMediator) {
+
+            // Report our own build: ClientIdentity lives in the shared cross-platform Core assembly,
+            // so the version is stamped here from the plugin assembly rather than derived there.
+            ClientIdentity.Version = typeof(DeepSkyLogPlugin).Assembly.GetName().Version?.ToString() ?? "unknown";
 
             if (Settings.Default.UpdateSettings) {
                 Settings.Default.Upgrade();
@@ -64,6 +75,7 @@ namespace DeepSkyLog.NINAPlugin {
                     imageSaveMediator, imageHistory);
                 _telemetryUploader = new TelemetryUploader(_telemetryCollector);
                 _telemetryUploader.Start();
+                TelemetryUploader.ServerRejected += OnServerRejected;
             } catch (Exception ex) {
                 // Log the whole exception: a bare Message here hid a NullReferenceException with no
                 // indication of where it came from.
@@ -99,6 +111,18 @@ namespace DeepSkyLog.NINAPlugin {
 
         private async Task ValidateAndLoadDataAsync() {
             var validationResult = await _authService.ValidateTokenAsync(DeepSkyLogKey);
+
+            if (validationResult.IsValid) {
+                // Feature availability comes from the account's tier. Fetched on a background thread,
+                // then pushed to the UI so the options page can grey out telemetry as a paid feature.
+                bool hasAccess = await _authService.HasNinaPluginAccessAsync(DeepSkyLogKey);
+                // Lifts a previous subscription block if the plan now covers telemetry, so an
+                // upgrade takes effect on the next validation rather than on the next NINA restart.
+                TelemetryUploader.NoteAccess(hasAccess);
+                Application.Current?.Dispatcher?.Invoke(() => HasTelemetryAccess = hasAccess);
+            } else {
+                Application.Current?.Dispatcher?.Invoke(() => HasTelemetryAccess = false);
+            }
 
             Application.Current?.Dispatcher?.Invoke(() => {
                 if (validationResult.IsValid) {
@@ -288,9 +312,28 @@ namespace DeepSkyLog.NINAPlugin {
             }
         }
 
+        /// <summary>
+        /// Whether the signed-in account's subscription tier includes live telemetry (Trial/Full).
+        /// The telemetry control stays visible either way, but is shown as a paid feature — greyed
+        /// out with a "requires subscription" note — when this is false. Unknown (not signed in,
+        /// still loading) defaults to false and flips once the tier is known.
+        /// </summary>
+        public bool HasTelemetryAccess {
+            get => _hasTelemetryAccess;
+            private set {
+                if (_hasTelemetryAccess != value) {
+                    _hasTelemetryAccess = value;
+                    RaisePropertyChanged();
+                }
+            }
+        }
+
+        private bool _hasTelemetryAccess;
+
         public override Task Teardown() {
             DeepSkyLogWatcher.UploadRejected -= OnUploadRejected;
             DeepSkyLogWatcher.UploadSucceeded -= OnUploadSucceeded;
+            TelemetryUploader.ServerRejected -= OnServerRejected;
             _telemetryUploader?.Dispose();
             _telemetryCollector?.Dispose();
             return base.Teardown();
@@ -399,19 +442,42 @@ namespace DeepSkyLog.NINAPlugin {
         /// selection, so a fix that did not take produces a fresh one.
         /// </summary>
         private void OnUploadRejected(string serverMessage) {
-            bool firstSinceClear = string.IsNullOrEmpty(_selectionWarning);
-
-            string warning = $"DeepSkyLog rejected the last upload: {serverMessage} " +
-                             "Frames are kept locally — check your location and equipment below, " +
-                             "then use the retry button to send them.";
+            // One clear sentence from the server (no "CODE -" prefix) plus a short, human reassurance.
+            // No duplicate instruction — the server already says what to pick again.
+            string warning = $"DeepSkyLog couldn't upload that frame. {serverMessage} " +
+                             "It's still saved on this PC, so it will be retried once this is sorted.";
             Application.Current?.Dispatcher?.Invoke(() => SelectionWarning = warning);
             RefreshParkedUploads();
 
-            if (firstSinceClear) {
-                NINA.Core.Utility.Notification.Notification.ShowError(
-                    $"DeepSkyLog rejected an upload: {serverMessage} " +
-                    "Frames are kept locally — check your location and equipment selection in the plugin options.");
+            // Re-toasts while the rejection persists (throttled), so a quota/subscription refusal is
+            // not only caught on the very first frame of the night.
+            NotifyRejection($"DeepSkyLog couldn't upload that frame. {serverMessage}");
+        }
+
+        /// <summary>
+        /// Live telemetry was refused — most often because the account has no subscription and the
+        /// server requires NINA plugin access. The events are gone either way, so this is only to
+        /// tell the user the feature is gated, not to ask them to fix the selection. The server
+        /// message already reads as a complete human sentence, so it is shown as-is.
+        /// </summary>
+        private void OnServerRejected(string message) {
+            if (string.IsNullOrWhiteSpace(message)) return;
+            NotifyRejection(message);
+        }
+
+        /// <summary>
+        /// Shows a NINA error notification, throttled to one per cooldown window, so a persistent
+        /// rejection is surfaced without spamming a toast on every frame or telemetry batch.
+        /// </summary>
+        private void NotifyRejection(string message) {
+            bool toast;
+            lock (RejectionToastLock) {
+                toast = (DateTime.UtcNow - _lastRejectionToastUtc).TotalSeconds >= RejectionToastCooldownSeconds;
+                if (toast) _lastRejectionToastUtc = DateTime.UtcNow;
             }
+            Application.Current?.Dispatcher?.Invoke(() => {
+                if (toast) NINA.Core.Utility.Notification.Notification.ShowError(message);
+            });
         }
 
         /// <summary>

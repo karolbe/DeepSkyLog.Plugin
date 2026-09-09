@@ -326,6 +326,41 @@ namespace DeepSkyLog.NINAPlugin {
             public string ExpiresAt { get; set; }
         }
 
+        /// <summary>
+        /// Whether the account's subscription tier grants NINA plugin access (which also gates live
+        /// telemetry). The server returns SUBSCRIPTION_REQUIRED for uploads and telemetry on tiers
+        /// without it, so the plugin uses this to show the feature as a (paid) upgrade rather than
+        /// let the user find out from a rejection. False on any error: unknown means "assume gated".
+        /// </summary>
+        public async Task<bool> HasNinaPluginAccessAsync(string apiToken) {
+            try {
+                using var request = new HttpRequestMessage(HttpMethod.Get, $"{BaseUrl}/api/subscriptions/current");
+                request.Headers.Authorization =
+                    new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiToken);
+
+                using var response = await _httpClient.SendAsync(request);
+                if (!response.IsSuccessStatusCode) {
+                    Logger.Debug($"DeepSkyLog: subscription check failed: {response.StatusCode}");
+                    return false;
+                }
+
+                string body = await response.Content.ReadAsStringAsync();
+                var sub = JsonConvert.DeserializeObject<SubscriptionTierResponse>(body);
+
+                // The server gates NINA/telemetry on hasNinaPluginAccess, which is false for FREE.
+                return sub != null && sub.Tier != null
+                       && !string.Equals(sub.Tier, "FREE", StringComparison.OrdinalIgnoreCase);
+            } catch (Exception ex) {
+                Logger.Debug($"DeepSkyLog: subscription check error: {ex.Message}");
+                return false;
+            }
+        }
+
+        private class SubscriptionTierResponse {
+            [JsonProperty("tier")]
+            public string Tier { get; set; }
+        }
+
         private void SendResponse(HttpListenerResponse response, string html) {
             try {
                 byte[] buffer = Encoding.UTF8.GetBytes(html);

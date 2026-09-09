@@ -1,4 +1,4 @@
-﻿using DeepSkyLog.NINAPlugin.Properties;
+using DeepSkyLog.NINAPlugin.Properties;
 using Namotion.Reflection;
 using Newtonsoft.Json;
 using NINA.Core.Enum;
@@ -90,13 +90,6 @@ namespace DeepSkyLog.NINAPlugin {
             imageSaveMediator.ImageSaved += ImageSaveMeditator_ImageSaved;
             Logger.Info("DeepSkyLog is loading");
         }
-        internal static string GetImageFilePath(Uri imageUri) {
-            // Use LocalPath, not UrlDecode(AbsolutePath): AbsolutePath keeps a leading slash and a
-            // '+' in the path (e.g. a target folder named "M56+92"), and UrlDecode then turns that
-            // '+' into a space, producing a path that doesn't exist on disk. LocalPath resolves the
-            // file:// URI to the correct Windows path directly.
-            return imageUri.LocalPath;
-        }
 
         private void ImageSaveMeditator_ImageSaved(object sender, ImageSavedEventArgs msg) {
             if (!Settings.Default.DeepSkyLogEnabled) {
@@ -106,9 +99,9 @@ namespace DeepSkyLog.NINAPlugin {
             Logger.Info("DeepSkyLog is enabled");
 
             string imageType = msg?.MetaData?.Image?.ImageType;
-            if (!ShouldUploadImageType(imageType,
-                                       Settings.Default.DeepSkyLogAllowSnapshots,
-                                       Settings.Default.DeepSkyLogSkipCalibrationFrames)) {
+            if (!UploadLogic.ShouldUploadImageType(imageType,
+                                                   Settings.Default.DeepSkyLogAllowSnapshots,
+                                                   Settings.Default.DeepSkyLogSkipCalibrationFrames)) {
                 Logger.Info($"DeepSkyLog is not uploading this {imageType ?? "untyped"} frame; " +
                             "only light frames are sent unless the plugin options say otherwise");
                 return;
@@ -120,47 +113,24 @@ namespace DeepSkyLog.NINAPlugin {
                 Logger.Warning($"session metadata save failed: {e.Message}");
             }
         }
-        /// <summary>
-        /// Whether a frame of this type belongs in DeepSkyLog.
-        /// </summary>
-        /// <remarks>
-        /// Lights are the point of the log. Calibration frames — flat, dark, bias — describe the
-        /// rig rather than the sky, and they carry the target name and coordinates of whichever
-        /// sequence happened to be loaded when they were shot. Uploading them files a morning's
-        /// flats under last night's target, so they are skipped unless the user asks for them.
-        /// Snapshots keep their own long-standing switch.
-        ///
-        /// A frame NINA did not classify is treated the same as calibration: something that cannot
-        /// be identified is not something to file against a project.
-        /// </remarks>
-        internal static bool ShouldUploadImageType(string imageType, bool allowSnapshots,
-                                                   bool skipCalibrationFrames) {
-            if (string.Equals(imageType, ImageTypes.LIGHT, StringComparison.OrdinalIgnoreCase)) {
-                return true;
-            }
-            if (string.Equals(imageType, ImageTypes.SNAPSHOT, StringComparison.OrdinalIgnoreCase)) {
-                return allowSnapshots;
-            }
-            return !skipCalibrationFrames;
-        }
 
         private async Task ProcessImageSave(ImageSavedEventArgs msg) {
             try {
                 // Attempt to retry any failed requests first
                 await RetryFailedRequestsAsync();
 
-                string imageFilePath = GetImageFilePath(msg.PathToImage);
+                string imageFilePath = UploadLogic.GetImageFilePath(msg.PathToImage);
                 WeatherMetaDataRecord weatherRecord = new WeatherMetaDataRecord(msg);
                 ImageMetaDataRecord imageMetaDataRecord = new ImageMetaDataRecord(msg, imageFilePath);
                 AcquisitionMetaDataRecord acquisitionMetaDataRecord = new AcquisitionMetaDataRecord(msg);
 
                 // Calculate checksum of the first 50KB of the image file
-                string checksum = CalculateFileChecksum(imageFilePath);
+                string checksum = UploadLogic.CalculateFileChecksum(imageFilePath);
                 if (string.IsNullOrEmpty(checksum)) {
                     // File was unreadable or not yet flushed. Fall back to a deterministic key from
                     // the path and exposure start so the frame still uploads and de-duplicates on
                     // re-send — the server rejects a null checksum and drops the whole frame.
-                    checksum = FallbackChecksum(imageFilePath, msg.MetaData.Image.ExposureStart);
+                    checksum = UploadLogic.FallbackChecksum(imageFilePath, msg.MetaData.Image.ExposureStart);
                     Logger.Warning($"No file checksum for {imageFilePath}; using fallback {checksum}");
                 }
 
@@ -338,18 +308,35 @@ namespace DeepSkyLog.NINAPlugin {
         }
 
         /// <summary>Pull the human-readable message out of the API error envelope, if there is one.</summary>
-        private static string DescribeError(string responseContent) {
+        internal static string DescribeError(string responseContent) {
             try {
+                // Only the human Message is shown; the error code (STALE_LOCATION_REFERENCE, ...)
+                // is for logs and support, not for the user to read.
                 var error = JsonConvert.DeserializeObject<ApiErrorResponse>(responseContent);
                 if (!string.IsNullOrWhiteSpace(error?.Message)) {
-                    return string.IsNullOrWhiteSpace(error.Error)
-                        ? error.Message
-                        : $"{error.Error} - {error.Message}";
+                    return error.Message;
+                }
+                if (!string.IsNullOrWhiteSpace(error?.Error)) {
+                    return error.Error;
                 }
             } catch (Exception) {
                 // Not our envelope; fall through to the raw body.
             }
             return string.IsNullOrWhiteSpace(responseContent) ? "(no response body)" : responseContent;
+        }
+
+        /// <summary>
+        /// The machine-readable code out of the API error envelope ("SUBSCRIPTION_REQUIRED",
+        /// "STALE_LOCATION_REFERENCE", ...), or null when the body is not our envelope. Callers use
+        /// it to tell a refusal they can act on from one they can only report.
+        /// </summary>
+        internal static string ErrorCode(string responseContent) {
+            try {
+                var error = JsonConvert.DeserializeObject<ApiErrorResponse>(responseContent);
+                return string.IsNullOrWhiteSpace(error?.Error) ? null : error.Error;
+            } catch (Exception) {
+                return null;
+            }
         }
 
         private static void SaveFailedRequest(string filePath, string json) {
@@ -632,52 +619,6 @@ namespace DeepSkyLog.NINAPlugin {
             return warning;
         }
 
-        // Deterministic stand-in for the file content hash when the file can't be read. Derived
-        // from the path and exposure start so the same frame maps to the same key on retry, keeping
-        // server-side de-duplication working. Prefixed "nocks-" to mark it as a non-content hash.
-        internal static string FallbackChecksum(string filePath, DateTime exposureStart) {
-            string seed = (filePath ?? string.Empty) + "|" + exposureStart.ToString("o");
-            using (var sha256 = SHA256.Create()) {
-                byte[] hashBytes = sha256.ComputeHash(Encoding.UTF8.GetBytes(seed));
-                return "nocks-" + Convert.ToHexString(hashBytes).ToLowerInvariant();
-            }
-        }
-
-        internal static string CalculateFileChecksum(string filePath) {
-            try {
-                if (!File.Exists(filePath)) {
-                    Logger.Warning($"File not found for checksum calculation: {filePath}");
-                    return null;
-                }
-
-                const int bufferSize = 50 * 1024; // 50KB
-                using (var fileStream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
-                using (var sha256 = SHA256.Create()) {
-                    byte[] buffer = new byte[bufferSize];
-                    int bytesRead = fileStream.Read(buffer, 0, bufferSize);
-                    
-                    if (bytesRead == 0) {
-                        Logger.Warning($"File is empty for checksum calculation: {filePath}");
-                        return null;
-                    }
-
-                    // If we read less than 50KB, resize the buffer to actual bytes read
-                    if (bytesRead < bufferSize) {
-                        Array.Resize(ref buffer, bytesRead);
-                    }
-
-                    byte[] hashBytes = sha256.ComputeHash(buffer);
-                    string checksum = Convert.ToHexString(hashBytes).ToLowerInvariant();
-                    
-                    Logger.Debug($"Calculated checksum for {filePath} (first {bytesRead} bytes): {checksum}");
-                    return checksum;
-                }
-            } catch (Exception ex) {
-                Logger.Warning($"Error calculating checksum for {filePath}: {ex.Message}");
-                return null;
-            }
-        }
-
         public class ImageMetaDataRecord {
             public int ExposureNumber { get; set; }
             public string FilePath { get; set; }
@@ -845,8 +786,8 @@ namespace DeepSkyLog.NINAPlugin {
 
             public AcquisitionMetaDataRecord(ImageSavedEventArgs msg) {
                 TargetName = msg.MetaData.Target.Name;
-                RACoordinates = ReformatRA(msg.MetaData.Target.Coordinates?.RAString);
-                DECCoordinates = ReformatDEC(msg.MetaData.Target.Coordinates?.DecString);
+                RACoordinates = UploadLogic.ReformatRA(msg.MetaData.Target.Coordinates?.RAString);
+                DECCoordinates = UploadLogic.ReformatDEC(msg.MetaData.Target.Coordinates?.DecString);
                 TelescopeName = msg.MetaData.Telescope.Name;
                 FocalLength = Utility.Utility.ReformatDouble(msg.MetaData.Telescope.FocalLength);
                 FocalRatio = Utility.Utility.ReformatDouble(msg.MetaData.Telescope.FocalRatio);
@@ -856,29 +797,6 @@ namespace DeepSkyLog.NINAPlugin {
                 ObserverLatitude = Utility.Utility.ReformatDouble(msg.MetaData.Observer.Latitude);
                 ObserverLongitude = Utility.Utility.ReformatDouble(msg.MetaData.Observer.Longitude);
                 ObserverElevation = Utility.Utility.ReformatDouble(msg.MetaData.Observer.Elevation);
-            }
-
-            public string ReformatRA(string RAString) {
-                try {
-                    string pattern = @"(\d+):(\d+):(\d+)";
-                    if (Regex.IsMatch(RAString, pattern)) {
-                        Match match = Regex.Match(RAString, pattern);
-                        return $"{Zeros(match.Groups[1].Value)}h {Zeros(match.Groups[2].Value)}m {Zeros(match.Groups[3].Value)}s";
-                    } else {
-                        return RAString;
-                    }
-                } catch (Exception) {
-                    return "";
-                }
-            }
-
-            private string Zeros(string value) {
-                value = value.TrimStart('0');
-                return (value == "") ? "0" : value;
-            }
-
-            public string ReformatDEC(string DECString) {
-                return DECString != null ? DECString : "";
             }
         }
 
@@ -892,12 +810,44 @@ namespace DeepSkyLog.NINAPlugin {
             public string CaptureSoftware { get; set; }
             public string Hash { get; set; }
 
+            /// <summary>
+            /// Focal length in mm, and the pixel size in micrometers, as the server reports them.
+            /// Null when the record has never had them filled in.
+            ///
+            /// These are what make two rigs different rather than two spellings of one: image scale
+            /// is 206.265 * pixelSize / focalLength. A telescope with and without a reducer keeps one
+            /// name and takes two focal lengths, and TELESCOP often carries the mount rather than the
+            /// tube, so the numbers can be the only thing telling two records apart.
+            /// </summary>
+            public double? FocalLength { get; set; }
+
+            public double? PixelSize { get; set; }
+
             public override string ToString() {
+                // A named record shows its name and nothing else. The name already reads
+                // "Esprit 120 + ZWO ASI2600MM-Pro @ 850 mm" — it is built from the telescope, the
+                // camera and the focal length — so appending those again gave the dropdown a line
+                // that repeated itself twice over.
+                if (!string.IsNullOrEmpty(Name)) {
+                    return Name.Trim();
+                }
+
                 var parts = new List<string>();
-                if (!string.IsNullOrEmpty(Name)) parts.Add(Name);
                 if (!string.IsNullOrEmpty(Telescope)) parts.Add(Telescope);
                 if (!string.IsNullOrEmpty(Camera)) parts.Add(Camera);
-                return parts.Count > 0 ? string.Join(" - ", parts) : $"Equipment {Id}";
+                if (parts.Count == 0) {
+                    return $"Equipment {Id}";
+                }
+
+                // Unnamed, the telescope and camera can be identical for two different rigs — 298 mm
+                // and 128 mm on the same mount and camera are two records — and picking the wrong
+                // one here files a whole night under gear it was not shot with. The focal length is
+                // what separates them.
+                var label = string.Join(" - ", parts);
+                if (FocalLength.HasValue && FocalLength.Value > 0) {
+                    label += " @ " + FocalLength.Value.ToString("0") + " mm";
+                }
+                return label;
             }
         }
 
