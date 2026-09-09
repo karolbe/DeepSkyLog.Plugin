@@ -9,9 +9,8 @@ namespace DeepSkyLog.NINAPlugin {
     /// </summary>
     /// <remarks>
     /// The server refuses uploads from plugin builds below a published floor, and can only do that
-    /// for clients that say which build they are. Until now the version travelled only inside
-    /// telemetry JSON bodies, so a frame upload was anonymous — the exact requests the floor needs
-    /// to apply to. These headers go on every HttpClient the plugin owns.
+    /// for clients that say which build they are. These headers go on every HttpClient the plugin
+    /// owns.
     /// </remarks>
     public static class ClientIdentity {
 
@@ -21,12 +20,26 @@ namespace DeepSkyLog.NINAPlugin {
         /// </summary>
         public const string ClientId = "nina-plugin";
 
-        /// <summary>Four-part assembly version, e.g. "1.0.3.0".</summary>
-        public static string Version { get; } =
-            Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
+        /// <summary>
+        /// The value telemetry batches carry, e.g. "DeepSkyLog.NINAPlugin/1.0.3.0".
+        /// </summary>
+        public const string ClientVersionPrefix = "DeepSkyLog.NINAPlugin/";
 
-        /// <summary>The value telemetry batches carry, e.g. "DeepSkyLog.NINAPlugin/1.0.3.0".</summary>
-        public static string ClientVersionString { get; } = "DeepSkyLog.NINAPlugin/" + Version;
+        /// <summary>
+        /// Reported build, e.g. "1.0.3.0". The plugin sets this once, from its own assembly version,
+        /// on load. Defaults to "unknown" so Core-only unit tests (which have no plugin assembly)
+        /// still get a non-null value; the server treats a non-numeric version as indeterminate
+        /// rather than "too old".
+        /// </summary>
+        public static string Version { get; set; } = "unknown";
+
+        /// <summary>The version string the telemetry body and headers carry.</summary>
+        public static string ClientVersionString => ClientVersionPrefix + Version;
+
+        /// <summary>Reads the plugin's own assembly version; used to stamp ClientIdentity.Version.</summary>
+        public static string ReadAssemblyVersion() {
+            return Assembly.GetEntryAssembly()?.GetName().Version?.ToString() ?? "unknown";
+        }
 
         /// <summary>
         /// Stamps a client's default headers. Safe to call once per static HttpClient at
@@ -37,7 +50,7 @@ namespace DeepSkyLog.NINAPlugin {
                 client.DefaultRequestHeaders.Add("X-Client-Id", ClientId);
                 client.DefaultRequestHeaders.Add("X-Client-Version", Version);
                 client.DefaultRequestHeaders.UserAgent.ParseAdd(ClientVersionString);
-            } catch (Exception) {
+            } catch {
                 // A duplicate or malformed header must never be the reason the plugin fails to
                 // load. Being unidentified simply means the server does not enforce a floor on us.
             }

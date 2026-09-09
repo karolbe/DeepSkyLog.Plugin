@@ -17,8 +17,8 @@ namespace DeepSkyLog.Plugin.Tests {
         [InlineData("1.0.0.5", "1.0.0.6")]
         [InlineData("1.0.3", "1.0.3.1")]
         public void OlderComparesLess(string older, string newer) {
-            Assert.True(UpdateCheckService.CompareVersions(older, newer) < 0);
-            Assert.True(UpdateCheckService.CompareVersions(newer, older) > 0);
+            Assert.True(VersionComparer.Compare(older, newer) < 0);
+            Assert.True(VersionComparer.Compare(newer, older) > 0);
         }
 
         [Theory]
@@ -28,8 +28,8 @@ namespace DeepSkyLog.Plugin.Tests {
         [InlineData("1.0.3.0", "1.0.3")]
         [InlineData(" 1.0.3.0 ", "1.0.3.0")]
         public void EqualVersionsCompareEqual(string a, string b) {
-            Assert.Equal(0, UpdateCheckService.CompareVersions(a, b));
-            Assert.Equal(0, UpdateCheckService.CompareVersions(b, a));
+            Assert.Equal(0, VersionComparer.Compare(a, b));
+            Assert.Equal(0, VersionComparer.Compare(b, a));
         }
 
         [Theory]
@@ -41,7 +41,7 @@ namespace DeepSkyLog.Plugin.Tests {
         public void UnreadableVersionsAreIndeterminate(string a, string b) {
             // ClientIdentity.Version falls back to the literal "unknown" when the assembly has no
             // version; that must not be read as "older than everything" and nag on every startup.
-            Assert.Equal(0, UpdateCheckService.CompareVersions(a, b));
+            Assert.Equal(0, VersionComparer.Compare(a, b));
         }
 
         [Fact]

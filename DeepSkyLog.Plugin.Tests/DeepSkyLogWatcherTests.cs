@@ -11,25 +11,25 @@ namespace DeepSkyLog.Plugin.Tests {
         [Fact]
         public void PlusInTargetName_PreservedAsPlus() {
             var uri = new Uri(@"C:\Images\M56+92FlatWizard\frame.fits");
-            Assert.Equal(@"C:\Images\M56+92FlatWizard\frame.fits", DeepSkyLogWatcher.GetImageFilePath(uri));
+            Assert.Equal(@"C:\Images\M56+92FlatWizard\frame.fits", UploadLogic.GetImageFilePath(uri));
         }
 
         [Fact]
         public void SpacesInPath_Preserved() {
             var uri = new Uri(@"C:\Astro\Sh2-155 Cave\frame.fits");
-            Assert.Equal(@"C:\Astro\Sh2-155 Cave\frame.fits", DeepSkyLogWatcher.GetImageFilePath(uri));
+            Assert.Equal(@"C:\Astro\Sh2-155 Cave\frame.fits", UploadLogic.GetImageFilePath(uri));
         }
 
         [Fact]
         public void UncPath_HostAndSharePreserved() {
             var uri = new Uri(@"\\nas\share\Images\frame.fits");
-            Assert.Equal(@"\\nas\share\Images\frame.fits", DeepSkyLogWatcher.GetImageFilePath(uri));
+            Assert.Equal(@"\\nas\share\Images\frame.fits", UploadLogic.GetImageFilePath(uri));
         }
 
         [Fact]
         public void PlainLocalPath_RoundTrips() {
             var uri = new Uri(@"C:\Images\M42\frame.fits");
-            Assert.Equal(@"C:\Images\M42\frame.fits", DeepSkyLogWatcher.GetImageFilePath(uri));
+            Assert.Equal(@"C:\Images\M42\frame.fits", UploadLogic.GetImageFilePath(uri));
         }
     }
 
@@ -38,16 +38,16 @@ namespace DeepSkyLog.Plugin.Tests {
         [Fact]
         public void SameInputs_ProduceSameHash() {
             var dt = new DateTime(2026, 7, 28, 22, 30, 0, DateTimeKind.Utc);
-            var a = DeepSkyLogWatcher.FallbackChecksum(@"C:\Images\M56+92\frame.fits", dt);
-            var b = DeepSkyLogWatcher.FallbackChecksum(@"C:\Images\M56+92\frame.fits", dt);
+            var a = UploadLogic.FallbackChecksum(@"C:\Images\M56+92\frame.fits", dt);
+            var b = UploadLogic.FallbackChecksum(@"C:\Images\M56+92\frame.fits", dt);
             Assert.Equal(a, b);
         }
 
         [Fact]
         public void DifferentPath_ProducesDifferentHash() {
             var dt = new DateTime(2026, 7, 28, 22, 30, 0, DateTimeKind.Utc);
-            var a = DeepSkyLogWatcher.FallbackChecksum(@"C:\Images\frame1.fits", dt);
-            var b = DeepSkyLogWatcher.FallbackChecksum(@"C:\Images\frame2.fits", dt);
+            var a = UploadLogic.FallbackChecksum(@"C:\Images\frame1.fits", dt);
+            var b = UploadLogic.FallbackChecksum(@"C:\Images\frame2.fits", dt);
             Assert.NotEqual(a, b);
         }
 
@@ -55,21 +55,21 @@ namespace DeepSkyLog.Plugin.Tests {
         public void DifferentTime_ProducesDifferentHash() {
             var dt1 = new DateTime(2026, 7, 28, 22, 30, 0, DateTimeKind.Utc);
             var dt2 = new DateTime(2026, 7, 28, 22, 31, 0, DateTimeKind.Utc);
-            var a = DeepSkyLogWatcher.FallbackChecksum(@"C:\Images\frame.fits", dt1);
-            var b = DeepSkyLogWatcher.FallbackChecksum(@"C:\Images\frame.fits", dt2);
+            var a = UploadLogic.FallbackChecksum(@"C:\Images\frame.fits", dt1);
+            var b = UploadLogic.FallbackChecksum(@"C:\Images\frame.fits", dt2);
             Assert.NotEqual(a, b);
         }
 
         [Fact]
         public void Result_StartsWithNocksPrefix() {
-            var result = DeepSkyLogWatcher.FallbackChecksum(@"C:\Images\frame.fits",
+            var result = UploadLogic.FallbackChecksum(@"C:\Images\frame.fits",
                 new DateTime(2026, 7, 28, 0, 0, 0, DateTimeKind.Utc));
             Assert.StartsWith("nocks-", result);
         }
 
         [Fact]
         public void NullPath_DoesNotThrow() {
-            var result = DeepSkyLogWatcher.FallbackChecksum(null,
+            var result = UploadLogic.FallbackChecksum(null,
                 new DateTime(2026, 7, 28, 0, 0, 0, DateTimeKind.Utc));
             Assert.StartsWith("nocks-", result);
         }
@@ -79,7 +79,7 @@ namespace DeepSkyLog.Plugin.Tests {
 
         [Fact]
         public void MissingFile_ReturnsNull() {
-            var result = DeepSkyLogWatcher.CalculateFileChecksum(@"C:\DoesNotExist\frame.fits");
+            var result = UploadLogic.CalculateFileChecksum(@"C:\DoesNotExist\frame.fits");
             Assert.Null(result);
         }
 
@@ -87,7 +87,7 @@ namespace DeepSkyLog.Plugin.Tests {
         public void EmptyFile_ReturnsNull() {
             var path = Path.GetTempFileName();
             try {
-                var result = DeepSkyLogWatcher.CalculateFileChecksum(path);
+                var result = UploadLogic.CalculateFileChecksum(path);
                 Assert.Null(result);
             } finally {
                 File.Delete(path);
@@ -99,7 +99,7 @@ namespace DeepSkyLog.Plugin.Tests {
             var path = Path.GetTempFileName();
             try {
                 File.WriteAllBytes(path, new byte[1024]);
-                var result = DeepSkyLogWatcher.CalculateFileChecksum(path);
+                var result = UploadLogic.CalculateFileChecksum(path);
                 Assert.NotNull(result);
                 Assert.Matches("^[0-9a-f]{64}$", result);
             } finally {
@@ -112,8 +112,8 @@ namespace DeepSkyLog.Plugin.Tests {
             var path = Path.GetTempFileName();
             try {
                 File.WriteAllBytes(path, Enumerable.Range(0, 512).Select(i => (byte)i).ToArray());
-                var a = DeepSkyLogWatcher.CalculateFileChecksum(path);
-                var b = DeepSkyLogWatcher.CalculateFileChecksum(path);
+                var a = UploadLogic.CalculateFileChecksum(path);
+                var b = UploadLogic.CalculateFileChecksum(path);
                 Assert.Equal(a, b);
             } finally {
                 File.Delete(path);
@@ -131,13 +131,13 @@ namespace DeepSkyLog.Plugin.Tests {
                 Array.Fill(second, (byte)0xBB);
                 File.WriteAllBytes(path, first.Concat(second).ToArray());
 
-                var hashFull = DeepSkyLogWatcher.CalculateFileChecksum(path);
+                var hashFull = UploadLogic.CalculateFileChecksum(path);
 
                 // Write only the first 50 KB to a second temp file
                 var path2 = Path.GetTempFileName();
                 try {
                     File.WriteAllBytes(path2, first);
-                    var hashTruncated = DeepSkyLogWatcher.CalculateFileChecksum(path2);
+                    var hashTruncated = UploadLogic.CalculateFileChecksum(path2);
                     Assert.Equal(hashFull, hashTruncated);
                 } finally {
                     File.Delete(path2);
@@ -150,26 +150,23 @@ namespace DeepSkyLog.Plugin.Tests {
 
     public class ReformatRATests {
 
-        private static DeepSkyLogWatcher.AcquisitionMetaDataRecord Record() =>
-            new DeepSkyLogWatcher.AcquisitionMetaDataRecord();
-
         [Theory]
         [InlineData("05:34:32", "5h 34m 32s")]
         [InlineData("00:00:00", "0h 0m 0s")]
         [InlineData("23:59:59", "23h 59m 59s")]
         [InlineData("01:02:03", "1h 2m 3s")]
         public void ValidHHmmss_FormatsCorrectly(string input, string expected) {
-            Assert.Equal(expected, Record().ReformatRA(input));
+            Assert.Equal(expected, UploadLogic.ReformatRA(input));
         }
 
         [Fact]
         public void NonMatchingString_ReturnedAsIs() {
-            Assert.Equal("invalid", Record().ReformatRA("invalid"));
+            Assert.Equal("invalid", UploadLogic.ReformatRA("invalid"));
         }
 
         [Fact]
         public void NullInput_ReturnsEmpty() {
-            Assert.Equal("", Record().ReformatRA(null));
+            Assert.Equal("", UploadLogic.ReformatRA(null));
         }
     }
 
@@ -190,8 +187,8 @@ namespace DeepSkyLog.Plugin.Tests {
         [InlineData("light")]
         [InlineData("Light")]
         public void LightsAreAlwaysUploaded(string imageType) {
-            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, SkipCalibration));
-            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType(imageType, AllowSnapshots, KeepCalibration));
+            Assert.True(UploadLogic.ShouldUploadImageType(imageType, BlockSnapshots, SkipCalibration));
+            Assert.True(UploadLogic.ShouldUploadImageType(imageType, AllowSnapshots, KeepCalibration));
         }
 
         [Theory]
@@ -199,7 +196,7 @@ namespace DeepSkyLog.Plugin.Tests {
         [InlineData("DARK")]
         [InlineData("BIAS")]
         public void CalibrationIsSkippedByDefault(string imageType) {
-            Assert.False(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, SkipCalibration));
+            Assert.False(UploadLogic.ShouldUploadImageType(imageType, BlockSnapshots, SkipCalibration));
         }
 
         [Theory]
@@ -207,19 +204,19 @@ namespace DeepSkyLog.Plugin.Tests {
         [InlineData("DARK")]
         [InlineData("BIAS")]
         public void CalibrationIsUploadedWhenTheUserAsksForIt(string imageType) {
-            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, KeepCalibration));
+            Assert.True(UploadLogic.ShouldUploadImageType(imageType, BlockSnapshots, KeepCalibration));
         }
 
         [Fact]
         public void SnapshotsKeepTheirOwnSwitch() {
-            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType("SNAPSHOT", AllowSnapshots, SkipCalibration));
-            Assert.False(DeepSkyLogWatcher.ShouldUploadImageType("SNAPSHOT", BlockSnapshots, SkipCalibration));
+            Assert.True(UploadLogic.ShouldUploadImageType("SNAPSHOT", AllowSnapshots, SkipCalibration));
+            Assert.False(UploadLogic.ShouldUploadImageType("SNAPSHOT", BlockSnapshots, SkipCalibration));
         }
 
         [Fact]
         public void SnapshotSwitchIsNotOverriddenByTheCalibrationSwitch() {
             // Turning calibration back on must not silently start sending snapshots too.
-            Assert.False(DeepSkyLogWatcher.ShouldUploadImageType("SNAPSHOT", BlockSnapshots, KeepCalibration));
+            Assert.False(UploadLogic.ShouldUploadImageType("SNAPSHOT", BlockSnapshots, KeepCalibration));
         }
 
         [Theory]
@@ -227,8 +224,8 @@ namespace DeepSkyLog.Plugin.Tests {
         [InlineData("")]
         [InlineData("SOMETHING_NINA_ADDED_LATER")]
         public void UnclassifiedFramesAreTreatedAsCalibration(string imageType) {
-            Assert.False(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, SkipCalibration));
-            Assert.True(DeepSkyLogWatcher.ShouldUploadImageType(imageType, BlockSnapshots, KeepCalibration));
+            Assert.False(UploadLogic.ShouldUploadImageType(imageType, BlockSnapshots, SkipCalibration));
+            Assert.True(UploadLogic.ShouldUploadImageType(imageType, BlockSnapshots, KeepCalibration));
         }
     }
 }

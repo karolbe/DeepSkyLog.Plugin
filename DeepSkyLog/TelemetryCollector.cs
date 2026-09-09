@@ -476,15 +476,6 @@ namespace DeepSkyLog.NINAPlugin {
             UpdateDeviceInfo(info);
         }
 
-        /// <summary>The parts of NINA's on-disk autofocus report this plugin reports on.</summary>
-        internal class AutoFocusReportData {
-            public double? Hfr { get; set; }
-            public double? DurationSeconds { get; set; }
-            public string Method { get; set; }
-            public double? RSquared { get; set; }
-            public List<double[]> Points { get; set; }
-        }
-
         /// <summary>
         /// Reads the report NINA writes to %localappdata%\NINA\AutoFocus for every run. This is the
         /// only route to the measured HFR on 3.1 — the image-history summary keeps positions only —
@@ -507,74 +498,11 @@ namespace DeepSkyLog.NINAPlugin {
                     .FirstOrDefault();
                 if (newest == null) return null;
 
-                return ParseAutoFocusReport(File.ReadAllText(newest.FullName));
+                return AutoFocusReportParser.Parse(File.ReadAllText(newest.FullName));
             } catch (Exception ex) {
                 Logger.Debug($"DeepSkyLog could not read the autofocus report: {ex.Message}");
                 return null;
             }
-        }
-
-        /// <summary>Maps NINA's report JSON onto the fields reported. Split out to be testable.</summary>
-        internal static AutoFocusReportData ParseAutoFocusReport(string json) {
-            try {
-                JObject report = JObject.Parse(json);
-
-                List<double[]> points = report["MeasurePoints"]?
-                    .Select(p => new[] { Value(p["Position"]) ?? double.NaN, Value(p["Value"]) ?? double.NaN })
-                    .Where(p => !double.IsNaN(p[0]) && !double.IsNaN(p[1]))
-                    .Take(MaxCurvePoints)
-                    .ToList();
-
-                return new AutoFocusReportData {
-                    Hfr = Value(report["CalculatedFocusPoint"]?["Value"]),
-                    DurationSeconds = TimeSpan.TryParse((string)report["Duration"], out TimeSpan d)
-                        ? Math.Round(d.TotalSeconds, 1)
-                        : (double?)null,
-                    Method = (string)report["Method"],
-                    RSquared = RSquaredForFitting(report),
-                    Points = points != null && points.Count > 0 ? points : null
-                };
-            } catch (Exception ex) {
-                Logger.Debug($"DeepSkyLog could not parse the autofocus report: {ex.Message}");
-                return null;
-            }
-        }
-
-        /// <summary>
-        /// Picks the goodness-of-fit for the curve autofocus actually used. <c>RSquares</c> holds one
-        /// entry per candidate fitting (Quadratic, Hyperbolic, LeftTrend, RightTrend) and
-        /// <c>Fitting</c> names the winner, so reporting any other entry — or whichever happened to
-        /// be serialised first — would describe a curve that was not applied.
-        /// </summary>
-        private static double? RSquaredForFitting(JObject report) {
-            JToken squares = report["RSquares"];
-            string fitting = (string)report["Fitting"];
-            if (squares == null || string.IsNullOrEmpty(fitting)) return null;
-
-            foreach (JProperty candidate in squares.Children<JProperty>()) {
-                if (string.Equals(candidate.Name, fitting, StringComparison.OrdinalIgnoreCase)) {
-                    return Value(candidate.Value);
-                }
-            }
-            return null;
-        }
-
-        /// <summary>
-        /// Reads a number out of the report, rejecting the non-finite ones. NINA writes
-        /// <c>"NaN"</c> as a JSON <em>string</em> for an unmeasured point — most often
-        /// InitialFocusPoint, which is why there is no reliable "HFR before" in the report.
-        /// </summary>
-        private static double? Value(JToken token) {
-            if (token == null || token.Type == JTokenType.Null) return null;
-            double parsed;
-            if (token.Type == JTokenType.String) {
-                if (!double.TryParse((string)token, NumberStyles.Float, CultureInfo.InvariantCulture, out parsed)) {
-                    return null;
-                }
-            } else {
-                try { parsed = (double)token; } catch (Exception) { return null; }
-            }
-            return Finite(parsed);
         }
 
         // ---------------------------------------------------------------------- reading

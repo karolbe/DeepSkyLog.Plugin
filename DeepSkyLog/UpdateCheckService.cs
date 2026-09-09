@@ -57,14 +57,14 @@ namespace DeepSkyLog.NINAPlugin {
                     }
 
                     string current = ClientIdentity.Version;
-                    if (CompareVersions(current, release.Latest) >= 0) {
+                    if (VersionComparer.Compare(current, release.Latest) >= 0) {
                         return null;
                     }
 
                     // Below the floor the situation is not "an update exists" but "uploads are
                     // already failing", and the wording has to say so — otherwise the user reads a
                     // polite suggestion while their night's frames are being refused.
-                    if (release.Minimum != null && CompareVersions(current, release.Minimum) < 0) {
+                    if (release.Minimum != null && VersionComparer.Compare(current, release.Minimum) < 0) {
                         return $"DeepSkyLog {release.Latest} is required — the server no longer "
                             + $"accepts uploads from version {current}. Update in NINA's Plugin Manager.";
                     }
@@ -76,45 +76,6 @@ namespace DeepSkyLog.NINAPlugin {
                 Logger.Debug($"DeepSkyLog: update check failed: {ex.Message}");
                 return null;
             }
-        }
-
-        /// <summary>
-        /// Orders dotted version numbers: negative if <paramref name="a"/> is older than
-        /// <paramref name="b"/>, positive if newer, 0 if equal or indeterminate.
-        /// </summary>
-        /// <remarks>
-        /// Missing trailing components count as zero, so the plugin's four-part "1.0.3.0" and a
-        /// three-part "1.0.3" in the manifest compare equal. A component that is not a plain number
-        /// makes the whole comparison indeterminate rather than "older" — a local build must not be
-        /// nagged on every launch.
-        /// </remarks>
-        internal static int CompareVersions(string a, string b) {
-            if (string.IsNullOrWhiteSpace(a) || string.IsNullOrWhiteSpace(b)) {
-                return 0;
-            }
-
-            string[] left = a.Trim().Split('.');
-            string[] right = b.Trim().Split('.');
-            int parts = Math.Max(left.Length, right.Length);
-
-            for (int i = 0; i < parts; i++) {
-                if (!TryComponent(left, i, out int l) || !TryComponent(right, i, out int r)) {
-                    return 0;
-                }
-                if (l != r) {
-                    return l.CompareTo(r);
-                }
-            }
-
-            return 0;
-        }
-
-        private static bool TryComponent(string[] parts, int index, out int value) {
-            if (index >= parts.Length) {
-                value = 0;
-                return true;
-            }
-            return int.TryParse(parts[index].Trim(), out value) && value >= 0;
         }
     }
 }

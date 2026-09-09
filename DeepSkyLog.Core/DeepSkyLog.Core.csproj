@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <!-- Plain, cross-platform: no WPF, no Windows targeting, no NINA. Holds the pure frame-upload
+         and telemetry wire logic so it can be unit-tested on Linux (the plugin itself is a
+         net8.0-windows NINA build). -->
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <RootNamespace>DeepSkyLog.NINAPlugin</RootNamespace>
+    <AssemblyName>DeepSkyLog.Core</AssemblyName>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+</Project>

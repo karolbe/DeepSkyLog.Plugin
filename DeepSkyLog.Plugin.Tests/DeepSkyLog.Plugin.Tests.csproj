@@ -1,8 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net8.0-windows</TargetFramework>
-    <UseWPF>true</UseWPF>
-    <EnableWindowsTargeting>true</EnableWindowsTargeting>
+    <TargetFramework>net8.0</TargetFramework>
     <IsPackable>false</IsPackable>
     <IsTestProject>true</IsTestProject>
   </PropertyGroup>
@@ -19,6 +17,8 @@
     </PackageReference>
   </ItemGroup>
   <ItemGroup>
-    <ProjectReference Include="..\DeepSkyLog\DeepSkyLog.Plugin.csproj" />
+    <!-- Only the pure cross-platform Core is under test here; the WPF/NINA plugin assembly is
+         Windows-only and deliberately not referenced. -->
+    <ProjectReference Include="..\DeepSkyLog.Core\DeepSkyLog.Core.csproj" />
   </ItemGroup>
 </Project>

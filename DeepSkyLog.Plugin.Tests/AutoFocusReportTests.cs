@@ -35,13 +35,13 @@ namespace DeepSkyLog.Plugin.Tests {
 
         [Fact]
         public void Hfr_ComesFromCalculatedFocusPoint() {
-            var report = TelemetryCollector.ParseAutoFocusReport(RealReport);
+            var report = AutoFocusReportParser.Parse(RealReport);
             Assert.Equal(2.975157403454237, report.Hfr.Value, 6);
         }
 
         [Fact]
         public void Curve_CarriesPositionAndHfrPairs() {
-            var report = TelemetryCollector.ParseAutoFocusReport(RealReport);
+            var report = AutoFocusReportParser.Parse(RealReport);
 
             Assert.Equal(3, report.Points.Count);
             Assert.Equal(24550.0, report.Points[0][0]);
@@ -54,19 +54,19 @@ namespace DeepSkyLog.Plugin.Tests {
         /// </summary>
         [Fact]
         public void RSquared_MatchesTheFittingActuallyUsed() {
-            var report = TelemetryCollector.ParseAutoFocusReport(RealReport);
+            var report = AutoFocusReportParser.Parse(RealReport);
             Assert.Equal(0.816808971698354, report.RSquared.Value, 6);
         }
 
         [Fact]
         public void Duration_ParsedToSeconds() {
-            var report = TelemetryCollector.ParseAutoFocusReport(RealReport);
+            var report = AutoFocusReportParser.Parse(RealReport);
             Assert.Equal(152.2, report.DurationSeconds.Value, 1);
         }
 
         [Fact]
         public void Method_IsReported() {
-            Assert.Equal("STARHFR", TelemetryCollector.ParseAutoFocusReport(RealReport).Method);
+            Assert.Equal("STARHFR", AutoFocusReportParser.Parse(RealReport).Method);
         }
 
         /// <summary>
@@ -81,7 +81,7 @@ namespace DeepSkyLog.Plugin.Tests {
               ""CalculatedFocusPoint"": { ""Position"": 100.0, ""Value"": ""NaN"" },
               ""RSquares"": { ""Hyperbolic"": 0.9 }
             }";
-            Assert.Null(TelemetryCollector.ParseAutoFocusReport(json).Hfr);
+            Assert.Null(AutoFocusReportParser.Parse(json).Hfr);
         }
 
         [Fact]
@@ -92,7 +92,7 @@ namespace DeepSkyLog.Plugin.Tests {
                 { ""Position"": 200.0, ""Value"": ""NaN"" }
               ]
             }";
-            var report = TelemetryCollector.ParseAutoFocusReport(json);
+            var report = AutoFocusReportParser.Parse(json);
 
             Assert.Single(report.Points);
             Assert.Equal(100.0, report.Points[0][0]);
@@ -101,12 +101,12 @@ namespace DeepSkyLog.Plugin.Tests {
         /// <summary>A malformed report must cost the event its HFR, never the event itself.</summary>
         [Fact]
         public void MalformedReport_ReturnsNullRatherThanThrowing() {
-            Assert.Null(TelemetryCollector.ParseAutoFocusReport("not json at all"));
+            Assert.Null(AutoFocusReportParser.Parse("not json at all"));
         }
 
         [Fact]
         public void MissingSections_LeaveFieldsNull() {
-            var report = TelemetryCollector.ParseAutoFocusReport(@"{ ""Filter"": ""R"" }");
+            var report = AutoFocusReportParser.Parse(@"{ ""Filter"": ""R"" }");
 
             Assert.NotNull(report);
             Assert.Null(report.Hfr);
