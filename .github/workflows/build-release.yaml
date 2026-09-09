@@ -20,6 +20,7 @@ env:
   PLUGIN_NAME: "DeepSkyLog"
   PLUGIN_SLN_NAME: "DeepSkyLog.Plugin"
   PLUGIN_DLL_NAME: "DeepSkyLog.NINAPlugin"
+  PLUGIN_CORE_DLL_NAME: "DeepSkyLog.Core"
   PLUGIN_MANIFEST_PATH: "d/DeepSkyLog"
 
 jobs:
@@ -54,6 +55,25 @@ jobs:
           Copy-Item "bin/Release/${{ env.PLUGIN_DLL_NAME }}.dll" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_DLL_NAME }}.dll" -Force
           if (Test-Path "bin/Release/${{ env.PLUGIN_DLL_NAME }}.pdb") {
             Copy-Item "bin/Release/${{ env.PLUGIN_DLL_NAME }}.pdb" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_DLL_NAME }}.pdb" -Force
+          }
+          # The plugin assembly has a hard reference to DeepSkyLog.Core. NINA resolves a plugin's
+          # dependencies by scanning the plugin's own folder, so shipping without this file makes
+          # the plugin fail to load with a FileNotFoundException.
+          Copy-Item "bin/Release/${{ env.PLUGIN_CORE_DLL_NAME }}.dll" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_CORE_DLL_NAME }}.dll" -Force
+          if (Test-Path "bin/Release/${{ env.PLUGIN_CORE_DLL_NAME }}.pdb") {
+            Copy-Item "bin/Release/${{ env.PLUGIN_CORE_DLL_NAME }}.pdb" "packages/${{ env.PLUGIN_NAME }}/${{ env.PLUGIN_CORE_DLL_NAME }}.pdb" -Force
+          }
+
+      - name: Verify package contents
+        shell: pwsh
+        run: |
+          # A missing dependency only shows up when a user's NINA refuses to load the plugin, which
+          # is far too late. Fail the release here instead.
+          $required = @("${{ env.PLUGIN_DLL_NAME }}.dll", "${{ env.PLUGIN_CORE_DLL_NAME }}.dll")
+          foreach ($file in $required) {
+            $path = "packages/${{ env.PLUGIN_NAME }}/$file"
+            if (-not (Test-Path $path)) { throw "Package is missing $file" }
+            Write-Host "OK $file"
           }
 
       - name: Create Plugin archives and manifests
