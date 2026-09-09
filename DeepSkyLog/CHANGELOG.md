@@ -1,5 +1,26 @@
 # DeepSkyLog NINA Plugin - Changelog
 
+## 1.0.4.0
+
+### Added
+- Live telemetry now shows when it needs a paid plan. The reporting interval is greyed out with a
+  "Requires a paid subscription" note on the free tier, so the feature says what it needs up front
+  instead of leaving you to work it out from uploads that quietly go nowhere. If the server refuses
+  telemetry for want of a subscription, the plugin stops asking until the plan changes.
+
+### Changed
+- Calibration frames — flats, darks and biases — are no longer uploaded. They carry the target name
+  and coordinates of whichever sequence happened to be loaded, so a morning's flats were filed under
+  the previous night's target. A new "Skip Calibration" option, on by default, controls this;
+  turn it off to keep the old behaviour.
+- Snapshots are no longer uploaded unless you ask for them. The "Allow SNAPSHOTs" option has always
+  defaulted to off, but the check that enforced it had been commented out, so snapshots were sent
+  regardless. The switch is now honoured.
+- The equipment dropdown no longer repeats itself: a named record already reads
+  "Esprit 120 + ZWO ASI2600MM-Pro @ 850 mm", so the telescope and camera are no longer appended a
+  second time. Records with no name now show their focal length, which is often the only thing
+  telling one rig from another.
+
 ## 1.0.3.0
 
 ### Added
