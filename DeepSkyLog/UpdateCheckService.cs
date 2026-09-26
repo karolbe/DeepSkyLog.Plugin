@@ -20,7 +20,7 @@ namespace DeepSkyLog.NINAPlugin {
     /// </remarks>
     public static class UpdateCheckService {
 
-        private const string BaseUrl = "https://app.deepskylog.space";
+        private static string BaseUrl => DeepSkyLogServer.BaseUrl;
 
         private static readonly HttpClient client =
             new HttpClient { Timeout = TimeSpan.FromSeconds(10) }.WithIdentity();

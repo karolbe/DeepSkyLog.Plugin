@@ -9,7 +9,11 @@ using NINA.Equipment.Equipment.MyTelescope;
 using NINA.Equipment.Interfaces.Mediator;
 using NINA.Image.ImageData;
 using NINA.Image.Interfaces;
+using NINA.Core.Enum;
+using NINA.Plugin.Interfaces;
+using NINA.Sequencer.Container;
 using NINA.Sequencer.Interfaces.Mediator;
+using NINA.Sequencer.SequenceItem;
 using NINA.WPF.Base.Interfaces.Mediator;
 using NINA.WPF.Base.Interfaces.ViewModel;
 using NINA.WPF.Base.Model;
@@ -96,6 +100,32 @@ namespace DeepSkyLog.NINAPlugin {
         private bool sequenceEventsAttached;
         private int sequenceAttachAttempts;
 
+        private readonly IMessageBroker messageBroker;
+        private TargetSchedulerSubscriber schedulerSubscriber;
+
+        /// <summary>Throttles the sequence tree walk; the uploader snapshots every few seconds.</summary>
+        private DateTime lastStartScanUtc = DateTime.MinValue;
+        private static readonly TimeSpan StartScanInterval = TimeSpan.FromSeconds(15);
+
+        /// <summary>
+        /// Target Scheduler publishes on NINA's plugin message broker. Subscribing by topic string
+        /// means no assembly reference and no hard dependency: with the scheduler absent no message
+        /// ever arrives, and the sequence scan below covers the plain case on its own.
+        /// </summary>
+        private const string SchedulerWaitTopic = "TargetScheduler-WaitStart";
+        private const string SchedulerTargetTopic = "TargetScheduler-NewTargetStart";
+        private static readonly Guid SchedulerSenderId =
+                new Guid("B4541BA9-7B07-4D71-B8E1-6C73D4933EA0");
+
+        /// <summary>
+        /// The instructions that mean "not imaging yet". Matched by type name rather than by type
+        /// so a NINA release adding another Wait* does not need a plugin rebuild to be recognised.
+        /// </summary>
+        private static readonly HashSet<string> WaitInstructionNames = new(StringComparer.Ordinal) {
+            "WaitForTime", "WaitForTimeSpan", "WaitForAltitude",
+            "WaitForSunAltitude", "WaitForMoonAltitude", "WaitUntilAboveHorizon"
+        };
+
         private int disposed;
 
         public TelemetryCollector(ITelescopeMediator telescopeMediator,
@@ -106,7 +136,8 @@ namespace DeepSkyLog.NINAPlugin {
                                   ICameraMediator cameraMediator,
                                   ISequenceMediator sequenceMediator,
                                   IImageSaveMediator imageSaveMediator,
-                                  IImageHistoryVM imageHistoryVM) {
+                                  IImageHistoryVM imageHistoryVM,
+                                  IMessageBroker messageBroker) {
             this.telescopeMediator = telescopeMediator;
             this.safetyMonitorMediator = safetyMonitorMediator;
             this.domeMediator = domeMediator;
@@ -115,6 +146,7 @@ namespace DeepSkyLog.NINAPlugin {
             this.cameraMediator = cameraMediator;
             this.sequenceMediator = sequenceMediator;
             this.imageSaveMediator = imageSaveMediator;
+            this.messageBroker = messageBroker;
             this.imageHistoryVM = imageHistoryVM;
 
             telescopeMediator?.RegisterConsumer(this);
@@ -123,6 +155,18 @@ namespace DeepSkyLog.NINAPlugin {
             focuserMediator?.RegisterConsumer(this);
             guiderMediator?.RegisterConsumer(this);
             cameraMediator?.RegisterConsumer(this);
+
+            if (messageBroker != null) {
+                // Wrapped: a broker that rejects a subscription must not stop telemetry starting.
+                try {
+                    schedulerSubscriber = new TargetSchedulerSubscriber(this);
+                    messageBroker.Subscribe(SchedulerWaitTopic, schedulerSubscriber);
+                    messageBroker.Subscribe(SchedulerTargetTopic, schedulerSubscriber);
+                } catch (Exception ex) {
+                    schedulerSubscriber = null;
+                    Logger.Warning($"DeepSkyLog telemetry could not subscribe to Target Scheduler: {ex.Message}");
+                }
+            }
 
             if (imageSaveMediator != null) {
                 imageSaveMediator.ImageSaved += OnImageSaved;
@@ -259,6 +303,38 @@ namespace DeepSkyLog.NINAPlugin {
             string target = msg?.MetaData?.Target?.Name;
             if (!string.IsNullOrEmpty(target)) {
                 UpdateTarget(target);
+            }
+
+            ApplyRecordedGuiding(msg);
+        }
+
+        /// <summary>
+        /// Takes guiding from the exposure's own recorded RMS rather than from the live guider info.
+        /// <para>
+        /// GuiderInfo.RMSError is only filled in by NINA's GuiderVM per guide step; every other path
+        /// leaves it at its all-zero default, and the zero guard in UpdateDeviceInfo(GuiderInfo) then
+        /// turns that into null. On rigs where that happens no guiding ever reaches the server, even
+        /// though NINA is writing real numbers into every FITS header - measured at 0.51 to 2.03
+        /// arcseconds on a night that reported nothing.
+        /// </para>
+        /// <para>
+        /// ImageMetaData.Image.RecordedRMS is the accumulation NINA kept over the exposure itself,
+        /// which is the same source the frame upload path has always used successfully. Arcseconds
+        /// are derived here the same way: the stored values are in pixels, and Scale converts them.
+        /// </para>
+        /// </summary>
+        private void ApplyRecordedGuiding(ImageSavedEventArgs msg) {
+            RMS rms = msg?.MetaData?.Image?.RecordedRMS;
+            // Total is zero for an exposure that was not guided at all; that is genuinely "no
+            // reading" rather than perfect guiding, and must not be reported as 0.00 arcseconds.
+            if (rms == null || rms.Total == 0) {
+                return;
+            }
+
+            lock (stateLock) {
+                state.GuidingRmsTotalArcsec = Finite(rms.Total * rms.Scale);
+                state.GuidingRmsRaArcsec = Finite(rms.RA * rms.Scale);
+                state.GuidingRmsDecArcsec = Finite(rms.Dec * rms.Scale);
             }
         }
 
@@ -505,10 +581,203 @@ namespace DeepSkyLog.NINAPlugin {
             }
         }
 
+        // ------------------------------------------------------- expected imaging start
+
+        /// <summary>
+        /// Records when imaging is expected to begin, or clears it once it has.
+        /// </summary>
+        /// <param name="startsAtUtc">null clears the estimate</param>
+        /// <param name="source">"sequence" or "targetScheduler"</param>
+        internal void SetExpectedStart(DateTime? startsAtUtc, string source, string reason) {
+            lock (stateLock) {
+                // The scheduler is authoritative while it is driving: it knows about targets the
+                // sequence tree cannot see. Don't let the generic scan overwrite what it said.
+                if (startsAtUtc != null
+                        && source == "sequence"
+                        && state.ExpectedStartSource == "targetScheduler") {
+                    return;
+                }
+                state.ExpectedStartAt = startsAtUtc == null
+                        ? (long?)null
+                        : new DateTimeOffset(DateTime.SpecifyKind(startsAtUtc.Value, DateTimeKind.Utc))
+                                .ToUnixTimeMilliseconds();
+                state.ExpectedStartSource = startsAtUtc == null ? null : source;
+                state.ExpectedStartReason = startsAtUtc == null ? null : reason;
+            }
+        }
+
+        /// <summary>Clears the estimate, but only if the given source is the one that set it.</summary>
+        internal void ClearExpectedStart(string source) {
+            lock (stateLock) {
+                if (state.ExpectedStartSource == null || state.ExpectedStartSource == source) {
+                    state.ExpectedStartAt = null;
+                    state.ExpectedStartSource = null;
+                    state.ExpectedStartReason = null;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Looks for a wait instruction currently running in the advanced sequence.
+        /// <para>
+        /// NINA's wait instructions report a live countdown from GetEstimatedDuration() - WaitForTime,
+        /// for instance, returns its target time minus now, rollover included - so the expected start
+        /// is simply now plus that. One path covers every Wait* type; none of them are special-cased.
+        /// </para>
+        /// <para>
+        /// Everything here is best-effort. The sequencer view models are built asynchronously and
+        /// these accessors reach straight into them, so a throw means "not ready", never an error.
+        /// </para>
+        /// </summary>
+        private void RefreshExpectedStartFromSequence() {
+            if (sequenceMediator == null) return;
+
+            DateTime now = DateTime.UtcNow;
+            if (now - lastStartScanUtc < StartScanInterval) return;
+            lastStartScanUtc = now;
+
+            try {
+                if (!sequenceMediator.Initialized || !sequenceMediator.IsAdvancedSequenceRunning()) {
+                    ClearExpectedStart("sequence");
+                    return;
+                }
+
+                ISequenceContainer root = RootContainer();
+                ISequenceItem waiting = root == null ? null : FindRunningWait(root);
+                if (waiting == null) {
+                    ClearExpectedStart("sequence");
+                    return;
+                }
+
+                TimeSpan remaining = waiting.GetEstimatedDuration();
+                if (remaining <= TimeSpan.Zero) {
+                    ClearExpectedStart("sequence");
+                    return;
+                }
+                SetExpectedStart(now.Add(remaining), "sequence", waiting.GetType().Name);
+            } catch (Exception ex) {
+                Logger.Trace($"DeepSkyLog telemetry could not read the sequence start: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// The top of the running sequence. Reached by climbing from any target container, because
+        /// ISequenceMediator hands out targets but never the root - and the wait that delays a night
+        /// usually sits above the targets, not inside one.
+        /// </summary>
+        private ISequenceContainer RootContainer() {
+            ISequenceContainer node = sequenceMediator.GetAllTargetsInAdvancedSequence()
+                    ?.FirstOrDefault() as ISequenceContainer;
+            // Bounded rather than while(true): a malformed tree must not spin here.
+            for (int depth = 0; node?.Parent != null && depth < 32; depth++) {
+                node = node.Parent;
+            }
+            return node;
+        }
+
+        /// <summary>Depth-first search for a running Wait* instruction.</summary>
+        private static ISequenceItem FindRunningWait(ISequenceContainer container, int depth = 0) {
+            if (container == null || depth > 32) return null;
+
+            IList<ISequenceItem> items;
+            try {
+                items = container.Items;
+            } catch (Exception) {
+                // The sequencer mutates these collections on the UI thread; a torn read is not fatal.
+                return null;
+            }
+            if (items == null) return null;
+
+            foreach (ISequenceItem item in items.ToList()) {
+                if (item == null || item.Status != SequenceEntityStatus.RUNNING) continue;
+
+                if (WaitInstructionNames.Contains(item.GetType().Name)) {
+                    return item;
+                }
+                if (item is ISequenceContainer child) {
+                    ISequenceItem found = FindRunningWait(child, depth + 1);
+                    if (found != null) return found;
+                }
+            }
+            return null;
+        }
+
+        /// <summary>
+        /// Receives Target Scheduler's pub/sub messages. Separate from the collector so the broker
+        /// holds a reference to this and not to the collector's whole surface.
+        /// </summary>
+        private sealed class TargetSchedulerSubscriber : ISubscriber {
+
+            private readonly TelemetryCollector owner;
+
+            internal TargetSchedulerSubscriber(TelemetryCollector owner) {
+                this.owner = owner;
+            }
+
+            public Task OnMessageReceived(IMessage message) {
+                try {
+                    // Topics are plain strings on a shared bus, so check the sender before trusting
+                    // a payload that is about to become a time shown to the user.
+                    if (message == null || message.SenderId != SchedulerSenderId) {
+                        return Task.CompletedTask;
+                    }
+
+                    if (message.Topic == SchedulerTargetTopic) {
+                        // A target started: the wait is over, whatever we were told earlier.
+                        owner.ClearExpectedStart("targetScheduler");
+                        return Task.CompletedTask;
+                    }
+
+                    if (message.Topic != SchedulerWaitTopic) return Task.CompletedTask;
+
+                    double? seconds = ReadDouble(message, "SecondsUntilNextTarget");
+                    if (seconds == null || seconds < 0) {
+                        return Task.CompletedTask;
+                    }
+
+                    // Timed from when the scheduler sent it, not from now: the message may have
+                    // queued, and the scheduler's countdown started at its own clock.
+                    DateTime from = message.SentAt == default
+                            ? DateTime.UtcNow
+                            : message.SentAt.UtcDateTime;
+                    owner.SetExpectedStart(from.AddSeconds(seconds.Value), "targetScheduler",
+                            ReadString(message, "TargetName"));
+                } catch (Exception ex) {
+                    Logger.Trace($"DeepSkyLog telemetry ignored a Target Scheduler message: {ex.Message}");
+                }
+                return Task.CompletedTask;
+            }
+
+            /// <summary>Headers are typed object; the scheduler may send a number or its string form.</summary>
+            private static double? ReadDouble(IMessage message, string key) {
+                object raw = ReadHeader(message, key);
+                if (raw == null) return null;
+                if (raw is double d) return d;
+                if (raw is int i) return i;
+                if (raw is long l) return l;
+                return double.TryParse(Convert.ToString(raw, CultureInfo.InvariantCulture),
+                        NumberStyles.Any, CultureInfo.InvariantCulture, out double parsed)
+                        ? parsed : (double?)null;
+            }
+
+            private static string ReadString(IMessage message, string key) {
+                object raw = ReadHeader(message, key);
+                return raw == null ? null : Convert.ToString(raw, CultureInfo.InvariantCulture);
+            }
+
+            private static object ReadHeader(IMessage message, string key) {
+                IDictionary<string, object> headers = message.CustomHeaders;
+                return headers != null && headers.TryGetValue(key, out object value) ? value : null;
+            }
+        }
+
         // ---------------------------------------------------------------------- reading
 
         /// <summary>Snapshot of the current state, safe to serialise off the caller's thread.</summary>
         public SessionState SnapshotState() {
+            // Refreshed here rather than on its own timer so it costs nothing between uploads, and
+            // outside the lock because it reaches into NINA's view models.
+            RefreshExpectedStartFromSequence();
             lock (stateLock) {
                 SessionState copy = state.Clone();
                 copy.ConnectedDevices = connectedDevices.OrderBy(d => d).ToList();
@@ -615,6 +884,16 @@ namespace DeepSkyLog.NINAPlugin {
                     sequenceEventsAttached = false;
                 }
             }
+            if (messageBroker != null && schedulerSubscriber != null) {
+                try {
+                    messageBroker.Unsubscribe(SchedulerWaitTopic, schedulerSubscriber);
+                    messageBroker.Unsubscribe(SchedulerTargetTopic, schedulerSubscriber);
+                } catch (Exception ex) {
+                    Logger.Trace($"DeepSkyLog telemetry unsubscribe failed: {ex.Message}");
+                }
+                schedulerSubscriber = null;
+            }
+
             if (imageSaveMediator != null) {
                 imageSaveMediator.ImageSaved -= OnImageSaved;
             }

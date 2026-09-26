@@ -15,7 +15,7 @@ using System.Web;
 namespace DeepSkyLog.NINAPlugin {
 
     public class AuthenticationService {
-        private const string BaseUrl = "https://app.deepskylog.space";
+        private static string BaseUrl => DeepSkyLogServer.BaseUrl;
         private static readonly HttpClient _httpClient = new HttpClient().WithIdentity();
         private HttpListener _listener;
         private CancellationTokenSource _cts;

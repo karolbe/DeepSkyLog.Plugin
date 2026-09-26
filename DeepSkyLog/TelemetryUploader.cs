@@ -21,7 +21,7 @@ namespace DeepSkyLog.NINAPlugin {
     /// </summary>
     public class TelemetryUploader : IDisposable {
 
-        private const string BaseUrl = "https://app.deepskylog.space";
+        private static string BaseUrl => DeepSkyLogServer.BaseUrl;
 
         /// <summary>
         /// Events drained per batch. The server rejects a batch carrying <em>more</em> than its

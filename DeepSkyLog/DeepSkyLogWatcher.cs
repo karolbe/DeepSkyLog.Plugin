@@ -309,7 +309,7 @@ namespace DeepSkyLog.NINAPlugin {
                     queryParams.Add($"equipment={Uri.EscapeDataString(equipmentId)}");
                 Logger.Debug($"Request Query Params: location={locationId} equipment={equipmentId}");
                 var queryString = queryParams.Count > 0 ? "?" + string.Join("&", queryParams) : "";
-                var baseUrl = "https://app.deepskylog.space/api/v1/nina/upload";
+                var baseUrl = $"{DeepSkyLogServer.BaseUrl}/api/v1/nina/upload";
                 var fullUrl = $"{baseUrl}{queryString}";
 
                 using var request = new HttpRequestMessage(HttpMethod.Post, fullUrl) {
@@ -574,7 +574,7 @@ namespace DeepSkyLog.NINAPlugin {
         /// </summary>
         public static async Task<List<Location>> GetLocationsAsync(string apiKey) {
             try {
-                string baseUrl = "https://app.deepskylog.space";
+                string baseUrl = DeepSkyLogServer.BaseUrl;
                 using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v1/list/locations");
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
@@ -602,7 +602,7 @@ namespace DeepSkyLog.NINAPlugin {
         /// <summary>The account's equipment, or null when it could not be fetched. See <see cref="GetLocationsAsync"/>.</summary>
         public static async Task<List<Equipment>> GetEquipmentsAsync(string apiKey) {
             try {
-                string baseUrl = "https://app.deepskylog.space";
+                string baseUrl = DeepSkyLogServer.BaseUrl;
                 using var request = new HttpRequestMessage(HttpMethod.Get, $"{baseUrl}/api/v1/list/equipments");
                 request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
 
@@ -704,6 +704,9 @@ namespace DeepSkyLog.NINAPlugin {
             public double GuidingRMSRAArcSec { get; set; }
             public double GuidingRMSDEC { get; set; }
             public double GuidingRMSDECArcSec { get; set; }
+            public double GuidingPeakRAArcSec { get; set; }
+            public double GuidingPeakDECArcSec { get; set; }
+            public int GuideStepCount { get; set; }
             public int? FocuserPosition { get; set; }
             public double FocuserTemp { get; set; }
             public double RotatorPosition { get; set; }
@@ -750,6 +753,12 @@ namespace DeepSkyLog.NINAPlugin {
                 GuidingRMSRAArcSec = GetGuidingMetricArcSec(msg.MetaData.Image, msg.MetaData.Image?.RecordedRMS?.RA);
                 GuidingRMSDEC = GetGuidingMetric(msg.MetaData.Image, msg.MetaData.Image?.RecordedRMS?.Dec);
                 GuidingRMSDECArcSec = GetGuidingMetricArcSec(msg.MetaData.Image, msg.MetaData.Image?.RecordedRMS?.Dec);
+                // The worst single guide step of the exposure, not its average. An RMS survives one
+                // jump big enough to smear the stars; this is what catches it. NINA tracks it
+                // alongside the RMS, so it is already sitting here.
+                GuidingPeakRAArcSec = GetGuidingMetricArcSec(msg.MetaData.Image, msg.MetaData.Image?.RecordedRMS?.PeakRA);
+                GuidingPeakDECArcSec = GetGuidingMetricArcSec(msg.MetaData.Image, msg.MetaData.Image?.RecordedRMS?.PeakDec);
+                GuideStepCount = msg.MetaData.Image?.RecordedRMS?.DataPoints ?? 0;
 
                 FocuserPosition = msg.MetaData.Focuser.Position;
                 FocuserTemp = Utility.Utility.ReformatDouble(msg.MetaData.Focuser.Temperature);

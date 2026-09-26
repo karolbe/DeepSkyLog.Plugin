@@ -64,7 +64,8 @@ namespace DeepSkyLog.NINAPlugin {
                                 IFocuserMediator focuserMediator,
                                 IGuiderMediator guiderMediator,
                                 ICameraMediator cameraMediator,
-                                 ISequenceMediator sequenceMediator) {
+                                 ISequenceMediator sequenceMediator,
+                                IMessageBroker messageBroker) {
 
             // Report our own build: ClientIdentity lives in the shared cross-platform Core assembly,
             // so the version is stamped here from the plugin assembly rather than derived there.
@@ -85,7 +86,7 @@ namespace DeepSkyLog.NINAPlugin {
             try {
                 _telemetryCollector = new TelemetryCollector(telescopeMediator, safetyMonitorMediator,
                     domeMediator, focuserMediator, guiderMediator, cameraMediator, sequenceMediator,
-                    imageSaveMediator, imageHistory);
+                    imageSaveMediator, imageHistory, messageBroker);
                 _telemetryUploader = new TelemetryUploader(_telemetryCollector);
                 _telemetryUploader.Start();
                 TelemetryUploader.ServerRejected += OnServerRejected;
@@ -242,7 +243,7 @@ namespace DeepSkyLog.NINAPlugin {
 
         private void ExecuteOpenWebApp(object parameter) {
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo {
-                FileName = "https://app.deepskylog.space",
+                FileName = DeepSkyLogServer.BaseUrl,
                 UseShellExecute = true
             });
         }
