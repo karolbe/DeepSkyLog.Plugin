@@ -35,12 +35,24 @@ namespace DeepSkyLog.NINAPlugin {
         private string _selectionWarning;
         private string _updateNotice;
 
-        // A server rejection that persists (quota hit, subscription lapsed) otherwise toasts on
-        // every frame or batch. Throttle the toast so the user is told without the plugin turning
-        // into an error-flasher; the options-page banner is refreshed regardless.
-        private static readonly object RejectionToastLock = new();
-        private DateTime _lastRejectionToastUtc = DateTime.MinValue;
-        private const int RejectionToastCooldownSeconds = 60;
+        // A problem that persists (stale selection, lapsed subscription, expired sign-in) would
+        // otherwise toast on every frame or batch — on an unattended rig, one error bubble per
+        // exposure all night. Each kind is announced when it first appears, then reminded at most
+        // every 30 minutes, and re-armed once it clears. Separate keys so a telemetry refusal
+        // cannot swallow the notice for a rejected frame. The options-page text is refreshed
+        // regardless.
+        private readonly NotificationThrottle _notifications = new(TimeSpan.FromMinutes(30));
+        private const string UploadRejectedKey = "upload-rejected";
+        private const string SubscriptionKey = "upload-subscription";
+        private const string TelemetryRejectedKey = "telemetry-rejected";
+        private const string SignInKey = "sign-in";
+
+        private const string LoadFailedMessage =
+            "Couldn't load locations and equipment from DeepSkyLog — keeping your saved selection. Press Refresh to try again.";
+
+        // Set while the parked uploads are waiting on the account's plan rather than on the
+        // selection, so the retry button does not tell the user to fix the wrong thing.
+        private volatile bool _uploadsNeedSubscription;
 
         [ImportingConstructor]
         public DeepSkyLogPlugin(IProfileService profileService,
@@ -66,6 +78,7 @@ namespace DeepSkyLog.NINAPlugin {
             new DeepSkyLogWatcher(imageSaveMediator);
             DeepSkyLogWatcher.UploadRejected += OnUploadRejected;
             DeepSkyLogWatcher.UploadSucceeded += OnUploadSucceeded;
+            DeepSkyLogWatcher.SignInRequired += OnSignInRequired;
 
             // Live session telemetry. Wrapped because a failure to attach to a mediator must not
             // take down the plugin — frame uploads are the primary job and have to keep working.
@@ -235,6 +248,8 @@ namespace DeepSkyLog.NINAPlugin {
         }
 
         private void OnTokenReceived(string token) {
+            // A fresh sign-in: if it later stops working too, say so straight away.
+            _notifications.Reset(SignInKey);
             Application.Current?.Dispatcher?.Invoke(() => {
                 DeepSkyLogKey = token;
                 AuthStatusMessage = string.Empty; // Will show username in UI after validation
@@ -333,6 +348,7 @@ namespace DeepSkyLog.NINAPlugin {
         public override Task Teardown() {
             DeepSkyLogWatcher.UploadRejected -= OnUploadRejected;
             DeepSkyLogWatcher.UploadSucceeded -= OnUploadSucceeded;
+            DeepSkyLogWatcher.SignInRequired -= OnSignInRequired;
             TelemetryUploader.ServerRejected -= OnServerRejected;
             _telemetryUploader?.Dispose();
             _telemetryCollector?.Dispose();
@@ -402,6 +418,8 @@ namespace DeepSkyLog.NINAPlugin {
         /// </summary>
         private void OnSelectionChanged() {
             SelectionWarning = null;
+            // A fix that did not take should produce a fresh notification, not wait 30 minutes.
+            _notifications.Reset(UploadRejectedKey);
             RefreshParkedUploads();
         }
 
@@ -416,9 +434,10 @@ namespace DeepSkyLog.NINAPlugin {
 
         private void RefreshParkedUploads() {
             int count = DeepSkyLogWatcher.CountParkedUploads();
-            string label = count > 0
-                ? $"Retry {count} parked upload{(count == 1 ? "" : "s")} with the selection above"
-                : null;
+            string plural = count == 1 ? "" : "s";
+            string label = count == 0 ? null
+                : _uploadsNeedSubscription ? $"Retry {count} parked upload{plural}"
+                : $"Retry {count} parked upload{plural} with the selection above";
             Application.Current?.Dispatcher?.Invoke(() => ParkedUploadsLabel = label);
         }
 
@@ -437,21 +456,41 @@ namespace DeepSkyLog.NINAPlugin {
         /// <summary>
         /// A live rejection, surfaced two ways: red text on the options page (persists until fixed)
         /// and a NINA notification bubble (catches the user who is not looking at the options).
-        /// The bubble fires only when the warning transitions from clear to set — a night of
-        /// rejected frames is one toast, not hundreds — and re-arms when the user changes their
-        /// selection, so a fix that did not take produces a fresh one.
+        /// The bubble fires when the problem first appears and then at most every 30 minutes while
+        /// it lasts, and re-arms when an upload gets through or the user changes their selection.
         /// </summary>
-        private void OnUploadRejected(string serverMessage) {
+        private void OnUploadRejected(string errorCode, string serverMessage) {
+            if (DeepSkyLogWatcher.IsSubscriptionRequired(errorCode)) {
+                OnUploadNeedsSubscription(serverMessage);
+                return;
+            }
+
             // One clear sentence from the server (no "CODE -" prefix) plus a short, human reassurance.
             // No duplicate instruction — the server already says what to pick again.
-            string warning = $"DeepSkyLog couldn't upload that frame. {serverMessage} " +
-                             "It's still saved on this PC, so it will be retried once this is sorted.";
+            string warning = $"DeepSkyLog couldn't upload a frame. {serverMessage} " +
+                             "It's kept on this PC and can be sent again with the retry button below once this is sorted.";
             Application.Current?.Dispatcher?.Invoke(() => SelectionWarning = warning);
             RefreshParkedUploads();
 
-            // Re-toasts while the rejection persists (throttled), so a quota/subscription refusal is
-            // not only caught on the very first frame of the night.
-            NotifyRejection($"DeepSkyLog couldn't upload that frame. {serverMessage}");
+            Notify(UploadRejectedKey, $"DeepSkyLog couldn't upload a frame. {serverMessage}", error: true);
+        }
+
+        /// <summary>
+        /// The account's plan does not cover NINA uploads. Unlike a stale selection there is
+        /// nothing to change in the options, so the text says where the fix is, and the retry
+        /// button stops pointing at the selection. Every frame of the night is refused the same
+        /// way, so this is exactly the case the throttle exists for.
+        /// </summary>
+        private void OnUploadNeedsSubscription(string serverMessage) {
+            _uploadsNeedSubscription = true;
+            string warning = $"{serverMessage} Frames are kept on this PC — once your DeepSkyLog plan " +
+                             "includes the NINA plugin, use the retry button below to send them.";
+            Application.Current?.Dispatcher?.Invoke(() => SelectionWarning = warning);
+            RefreshParkedUploads();
+
+            Notify(SubscriptionKey,
+                   $"DeepSkyLog isn't accepting uploads on this account's plan. {serverMessage} Frames are kept on this PC.",
+                   error: true);
         }
 
         /// <summary>
@@ -462,21 +501,45 @@ namespace DeepSkyLog.NINAPlugin {
         /// </summary>
         private void OnServerRejected(string message) {
             if (string.IsNullOrWhiteSpace(message)) return;
-            NotifyRejection(message);
+            Notify(TelemetryRejectedKey, message, error: true);
         }
 
         /// <summary>
-        /// Shows a NINA error notification, throttled to one per cooldown window, so a persistent
-        /// rejection is surfaced without spamming a toast on every frame or telemetry batch.
+        /// Frames cannot be delivered for want of a (valid) sign-in. Both cases keep the frames
+        /// on disk, so the message is reassurance plus the one action that fixes it. A rejected
+        /// token also triggers a re-validation, which clears it and brings back the Login button
+        /// when the server confirms it has expired — otherwise the page kept saying "Connected".
         /// </summary>
-        private void NotifyRejection(string message) {
-            bool toast;
-            lock (RejectionToastLock) {
-                toast = (DateTime.UtcNow - _lastRejectionToastUtc).TotalSeconds >= RejectionToastCooldownSeconds;
-                if (toast) _lastRejectionToastUtc = DateTime.UtcNow;
+        private void OnSignInRequired(SignInProblem problem) {
+            if (!_notifications.ShouldNotify(SignInKey)) return;
+
+            if (problem == SignInProblem.NotSignedIn) {
+                ShowNotification("DeepSkyLog is enabled but not signed in. Frames are kept on this PC " +
+                                 "and will upload once you sign in from the plugin options.", error: false);
+                return;
             }
+
+            const string message = "DeepSkyLog no longer accepts this sign-in. Frames are kept on this PC " +
+                                   "and will upload once you sign in again from the plugin options.";
+            Logger.Warning($"DeepSkyLog: {message}");
+            Application.Current?.Dispatcher?.Invoke(() => AuthStatusMessage = message);
+            ShowNotification(message, error: true);
+            Task.Run(ValidateAndLoadDataAsync);
+        }
+
+        private void Notify(string key, string message, bool error) {
+            if (_notifications.ShouldNotify(key)) {
+                ShowNotification(message, error);
+            }
+        }
+
+        private static void ShowNotification(string message, bool error) {
             Application.Current?.Dispatcher?.Invoke(() => {
-                if (toast) NINA.Core.Utility.Notification.Notification.ShowError(message);
+                if (error) {
+                    NINA.Core.Utility.Notification.Notification.ShowError(message);
+                } else {
+                    NINA.Core.Utility.Notification.Notification.ShowWarning(message);
+                }
             });
         }
 
@@ -496,8 +559,19 @@ namespace DeepSkyLog.NINAPlugin {
             NINA.Core.Utility.Notification.Notification.ShowWarning(notice);
         }
 
-        /// <summary>A delivered upload proves the selection works, so any stale warning comes down.</summary>
+        /// <summary>
+        /// A delivered upload proves the selection, the plan and the sign-in all work, so any stale
+        /// warning comes down and the notifications re-arm for the next time something breaks.
+        /// </summary>
         private void OnUploadSucceeded() {
+            _notifications.Reset(UploadRejectedKey);
+            _notifications.Reset(SubscriptionKey);
+            _notifications.Reset(SignInKey);
+
+            if (_uploadsNeedSubscription) {
+                _uploadsNeedSubscription = false;
+                RefreshParkedUploads();
+            }
             if (string.IsNullOrEmpty(_selectionWarning)) return;
             Application.Current?.Dispatcher?.Invoke(() => SelectionWarning = null);
         }
@@ -509,8 +583,25 @@ namespace DeepSkyLog.NINAPlugin {
                 var locations = await DeepSkyLogWatcher.GetLocationsAsync(DeepSkyLogKey);
                 var equipments = await DeepSkyLogWatcher.GetEquipmentsAsync(DeepSkyLogKey);
 
+                // Could not reach the server (offline at startup, a 5xx, an expired token). Keep
+                // what the dropdowns already show and do not validate: judging the saved IDs
+                // against nothing reported them as deleted and blanked the selection.
+                if (locations == null || equipments == null) {
+                    Application.Current?.Dispatcher?.Invoke(() => {
+                        // Don't bury a more specific message, such as "Session expired".
+                        if (string.IsNullOrEmpty(AuthStatusMessage)) {
+                            AuthStatusMessage = LoadFailedMessage;
+                        }
+                    });
+                    return;
+                }
+
                 // Update collections on UI thread
                 Application.Current?.Dispatcher?.Invoke(() => {
+                    if (AuthStatusMessage == LoadFailedMessage) {
+                        AuthStatusMessage = string.Empty;
+                    }
+
                     _locations.Clear();
                     _locations.Add(new DeepSkyLogWatcher.Location { Id = 0, Name = "Select Location..." });
                     foreach (var location in locations) {
@@ -533,7 +624,7 @@ namespace DeepSkyLog.NINAPlugin {
                     SelectionWarning = DeepSkyLogWatcher.ValidateSelectedIds(locations, equipments);
                 });
             } catch (Exception ex) {
-                Logger.Debug($"Failed to load locations/equipment: {ex.Message}");
+                Logger.Warning($"Failed to load locations/equipment: {ex.Message}");
             }
         }
 

@@ -294,6 +294,9 @@ namespace DeepSkyLog.NINAPlugin {
                 // session while silently discarding every batch, with the backoff reset each time.
                 Logger.Error($"DeepSkyLog is not accepting telemetry ({(int)response.StatusCode}): {body}. "
                              + "Telemetry is paused and will resume automatically; sign in again if it persists.");
+                if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized) {
+                    DeepSkyLogWatcher.RaiseSignInRequired(SignInProblem.TokenRejected);
+                }
                 return UploadResult.Unavailable;
             }
 

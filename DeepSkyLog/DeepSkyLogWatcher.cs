@@ -49,6 +49,15 @@ namespace DeepSkyLog.NINAPlugin {
         Unavailable
     }
 
+    /// <summary>Why frames cannot be delivered until the user signs in (again).</summary>
+    public enum SignInProblem {
+        /// <summary>The plugin is enabled but no DeepSkyLog account is connected.</summary>
+        NotSignedIn,
+
+        /// <summary>The server answered 401: the stored token is no longer accepted.</summary>
+        TokenRejected
+    }
+
     public class DeepSkyLogWatcher {
         // 30s to match the telemetry uploader; the default 100s let a black-holed connection stall
         // a retry pass for most of two minutes.
@@ -150,6 +159,14 @@ namespace DeepSkyLog.NINAPlugin {
                 var (locationId, equipmentId) = GetSelectedIds();
                 Logger.Debug($"Using location ID: {locationId}, equipment ID: {equipmentId}");
 
+                // Nobody signed in: posting would only earn a 401. Keep the frame so it uploads
+                // after sign-in, and tell the user why nothing is arriving.
+                if (string.IsNullOrEmpty(TokenStorage.Load())) {
+                    SaveFailedRequest(tempFilePath, json);
+                    RaiseSignInRequired(SignInProblem.NotSignedIn);
+                    return;
+                }
+
                 // Try posting the data with location and equipment parameters
                 switch (await TryPostToServerAsync(json, locationId, equipmentId)) {
                     case UploadResult.Transient:
@@ -216,7 +233,16 @@ namespace DeepSkyLog.NINAPlugin {
         /// lets the options page and a NINA notification put it in front of the user, whose action
         /// (re-selecting in the options) is the only thing that can fix it.
         /// </summary>
-        public static event Action<string> UploadRejected;
+        /// <remarks>Arguments are the server's error code (null when the body is not our
+        /// envelope) and its human-readable message.</remarks>
+        public static event Action<string, string> UploadRejected;
+
+        /// <summary>
+        /// Raised when frames cannot be delivered for want of a (valid) sign-in. Until now a 401 was
+        /// only logged, so a token that expired mid-night left the options page saying "Connected"
+        /// while every frame was being spooled. The subscriber throttles the notification.
+        /// </summary>
+        public static event Action<SignInProblem> SignInRequired;
 
         /// <summary>Raised on a delivered upload, so a stale-selection warning can clear itself.</summary>
         public static event Action UploadSucceeded;
@@ -244,17 +270,31 @@ namespace DeepSkyLog.NINAPlugin {
             await RetryFailedRequestsAsync();
         }
 
-        private static void RaiseUploadOutcome(string rejectionMessage) {
+        private static void RaiseUploadOutcome(string rejectionMessage, string errorCode = null) {
             // Subscriber faults must not surface into the upload path.
             try {
                 if (rejectionMessage == null) {
                     UploadSucceeded?.Invoke();
                 } else {
-                    UploadRejected?.Invoke(rejectionMessage);
+                    UploadRejected?.Invoke(errorCode, rejectionMessage);
                 }
             } catch (Exception ex) {
                 Logger.Debug($"DeepSkyLog upload-outcome notification failed: {ex.Message}");
             }
+        }
+
+        /// <summary>Shared with the telemetry uploader, whose 401s mean the same thing.</summary>
+        internal static void RaiseSignInRequired(SignInProblem problem) {
+            try {
+                SignInRequired?.Invoke(problem);
+            } catch (Exception ex) {
+                Logger.Debug($"DeepSkyLog sign-in notification failed: {ex.Message}");
+            }
+        }
+
+        /// <summary>The server's code for "this account's plan does not include the NINA plugin".</summary>
+        internal static bool IsSubscriptionRequired(string errorCode) {
+            return string.Equals(errorCode, "SUBSCRIPTION_REQUIRED", StringComparison.OrdinalIgnoreCase);
         }
 
         private static async Task<UploadResult> TryPostToServerAsync(string json, string locationId = null, string equipmentId = null) {
@@ -293,10 +333,13 @@ namespace DeepSkyLog.NINAPlugin {
                     // to actually do (e.g. "Re-select your equipment and location in the plugin
                     // settings"), and Debug logging is off for most people.
                     Logger.Error($"DeepSkyLog rejected the upload ({(int)response.StatusCode} {response.StatusCode}): {DescribeError(responseContent)}");
-                    RaiseUploadOutcome(DescribeError(responseContent));
+                    RaiseUploadOutcome(DescribeError(responseContent), ErrorCode(responseContent));
                 } else if (result == UploadResult.Unavailable) {
                     Logger.Error($"DeepSkyLog is not accepting uploads ({(int)response.StatusCode} {response.StatusCode}): {DescribeError(responseContent)}. "
                                  + "Frames are being kept locally and will upload once this clears — sign in again if it persists.");
+                    if (response.StatusCode == System.Net.HttpStatusCode.Unauthorized) {
+                        RaiseSignInRequired(SignInProblem.TokenRejected);
+                    }
                 } else {
                     Logger.Warning($"DeepSkyLog upload failed, will retry ({(int)response.StatusCode} {response.StatusCode}): {DescribeError(responseContent)}");
                 }
@@ -409,6 +452,13 @@ namespace DeepSkyLog.NINAPlugin {
                     return; // Still cooling down from a failed pass.
                 }
 
+                // Without a token every retry is a 401. The files stay put and go out after
+                // sign-in; this is not a failed pass, so it does not feed the backoff.
+                if (string.IsNullOrEmpty(TokenStorage.Load())) {
+                    RaiseSignInRequired(SignInProblem.NotSignedIn);
+                    return;
+                }
+
                 // Rebuild from disk each pass. The per-pass cap means entries can be left over,
                 // and the scan re-adds every file, so without this the queue grows without bound.
                 while (retryQueue.TryDequeue(out _)) { }
@@ -517,6 +567,11 @@ namespace DeepSkyLog.NINAPlugin {
             return Path.Combine(TempFolderPath, fileName);
         }
 
+        /// <summary>
+        /// The account's locations, or null when they could not be fetched. Null rather than an
+        /// empty list: an empty list reads as "the account has none", which made every network
+        /// blip report the saved selection as deleted and blank the dropdowns.
+        /// </summary>
         public static async Task<List<Location>> GetLocationsAsync(string apiKey) {
             try {
                 string baseUrl = "https://app.deepskylog.space";
@@ -533,6 +588,7 @@ namespace DeepSkyLog.NINAPlugin {
                     if (locationResponse?.Success == true) {
                         return locationResponse.Locations ?? new List<Location>();
                     }
+                    Logger.Warning("Failed to fetch locations: the server did not report success");
                 } else {
                     var errorResponse = JsonConvert.DeserializeObject<ApiErrorResponse>(responseContent);
                     Logger.Warning($"Failed to fetch locations: {errorResponse?.Message ?? response.StatusCode.ToString()}");
@@ -540,9 +596,10 @@ namespace DeepSkyLog.NINAPlugin {
             } catch (Exception ex) {
                 Logger.Warning($"Error fetching locations: {ex.Message}");
             }
-            return new List<Location>();
+            return null;
         }
 
+        /// <summary>The account's equipment, or null when it could not be fetched. See <see cref="GetLocationsAsync"/>.</summary>
         public static async Task<List<Equipment>> GetEquipmentsAsync(string apiKey) {
             try {
                 string baseUrl = "https://app.deepskylog.space";
@@ -559,6 +616,7 @@ namespace DeepSkyLog.NINAPlugin {
                     if (equipmentResponse?.Success == true) {
                         return equipmentResponse.Equipments ?? new List<Equipment>();
                     }
+                    Logger.Warning("Failed to fetch equipment: the server did not report success");
                 } else {
                     var errorResponse = JsonConvert.DeserializeObject<ApiErrorResponse>(responseContent);
                     Logger.Warning($"Failed to fetch equipment: {errorResponse?.Message ?? response.StatusCode.ToString()}");
@@ -566,7 +624,7 @@ namespace DeepSkyLog.NINAPlugin {
             } catch (Exception ex) {
                 Logger.Warning($"Error fetching equipment: {ex.Message}");
             }
-            return new List<Equipment>();
+            return null;
         }
 
         private static (string locationId, string equipmentId) GetSelectedIds() {

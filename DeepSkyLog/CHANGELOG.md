@@ -1,5 +1,21 @@
 # DeepSkyLog NINA Plugin - Changelog
 
+## Unreleased
+
+### Fixed
+- A sign-in that expires, or a plugin that is enabled without being signed in, is now reported
+  with a notification. Previously frames were quietly kept on disk while the options still said
+  "Connected". An expired sign-in is re-checked straight away, so the Login button comes back.
+- Being offline when NINA starts no longer reports your saved location and equipment as deleted
+  and blanks the dropdowns. The saved selection is kept, and the options say DeepSkyLog could not
+  be reached.
+- When the account's plan does not include NINA uploads, the plugin now says so plainly and points
+  to the plan rather than the location/equipment selection.
+- Notifications no longer repeat every minute while a problem persists. Each kind of problem is
+  announced when it first appears and reminded at most every 30 minutes. It is announced again
+  straight away once it has cleared and comes back. A telemetry refusal can no longer hide a
+  rejected-frame notification.
+
 ## 1.0.4.0
 
 ### Changed
