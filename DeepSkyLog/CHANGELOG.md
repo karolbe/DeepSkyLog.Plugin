@@ -1,8 +1,11 @@
 # DeepSkyLog NINA Plugin - Changelog
 
-## Unreleased
+## 1.0.5.0
 
 ### Added
+- Live telemetry reports what Target Scheduler is doing: the project and target being imaged, or
+  the one it is waiting for, and whether it is imaging, waiting or stopped. The target name now
+  updates as soon as the scheduler picks it, not only once the first frame is saved.
 - Uploaded frames now include peak guiding error in RA and Dec, in arcseconds, alongside the
   guiding RMS.
 

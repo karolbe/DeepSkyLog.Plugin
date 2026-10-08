@@ -9,8 +9,8 @@ using System.Runtime.InteropServices;
 
 // [MANDATORY] The assembly versioning
 // For local builds, update manually. For CI builds, this is replaced automatically.
-[assembly: AssemblyVersion("1.0.4.0")]
-[assembly: AssemblyFileVersion("1.0.4.0")]
+[assembly: AssemblyVersion("1.0.5.0")]
+[assembly: AssemblyFileVersion("1.0.5.0")]
 
 // [MANDATORY] The name of your plugin
 [assembly: AssemblyTitle("DeepSkyLog")]
