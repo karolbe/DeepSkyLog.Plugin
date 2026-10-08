@@ -114,6 +114,11 @@ namespace DeepSkyLog.NINAPlugin {
         /// </summary>
         private const string SchedulerWaitTopic = "TargetScheduler-WaitStart";
         private const string SchedulerTargetTopic = "TargetScheduler-NewTargetStart";
+        private const string SchedulerTargetRepeatTopic = "TargetScheduler-TargetStart";
+        private const string SchedulerStoppedTopic = "TargetScheduler-ContainerStopped";
+        private static readonly string[] SchedulerTopics = {
+            SchedulerWaitTopic, SchedulerTargetTopic, SchedulerTargetRepeatTopic, SchedulerStoppedTopic
+        };
         private static readonly Guid SchedulerSenderId =
                 new Guid("B4541BA9-7B07-4D71-B8E1-6C73D4933EA0");
 
@@ -160,8 +165,9 @@ namespace DeepSkyLog.NINAPlugin {
                 // Wrapped: a broker that rejects a subscription must not stop telemetry starting.
                 try {
                     schedulerSubscriber = new TargetSchedulerSubscriber(this);
-                    messageBroker.Subscribe(SchedulerWaitTopic, schedulerSubscriber);
-                    messageBroker.Subscribe(SchedulerTargetTopic, schedulerSubscriber);
+                    foreach (string topic in SchedulerTopics) {
+                        messageBroker.Subscribe(topic, schedulerSubscriber);
+                    }
                 } catch (Exception ex) {
                     schedulerSubscriber = null;
                     Logger.Warning($"DeepSkyLog telemetry could not subscribe to Target Scheduler: {ex.Message}");
@@ -177,7 +183,7 @@ namespace DeepSkyLog.NINAPlugin {
 
             AttachSequenceEvents();
 
-            Logger.Info("DeepSkyLog telemetry collector attached");
+            Logger.Debug("DeepSkyLog telemetry collector attached");
         }
 
         /// <summary>Null while no session is open, which is the uploader's cue to stay quiet.</summary>
@@ -235,7 +241,7 @@ namespace DeepSkyLog.NINAPlugin {
                     sequenceMediator.SequenceStarting += OnSequenceStarting;
                     sequenceMediator.SequenceFinished += OnSequenceFinished;
                     sequenceEventsAttached = true;
-                    Logger.Info("DeepSkyLog telemetry attached to sequence events");
+                    Logger.Debug("DeepSkyLog telemetry attached to sequence events");
                     return true;
                 } catch (Exception ex) {
                     Logger.Trace($"DeepSkyLog telemetry sequencer not ready yet: {ex.Message}");
@@ -257,9 +263,11 @@ namespace DeepSkyLog.NINAPlugin {
                 sessionClosed = false;
                 sessionEndQueued = false;
                 state.SequenceRunning = true;
+                // Whatever the scheduler said during an earlier run is not current any more.
+                SchedulerActivity.SchedulerStopped(state);
             }
             Enqueue(TelemetryEventType.SessionStart, "Sequence started", null);
-            Logger.Info($"DeepSkyLog telemetry session {sessionUuid} started");
+            Logger.Debug($"DeepSkyLog telemetry session {sessionUuid} started");
             return Task.CompletedTask;
         }
 
@@ -267,11 +275,13 @@ namespace DeepSkyLog.NINAPlugin {
             lock (stateLock) {
                 state.SequenceRunning = false;
                 sessionEndQueued = true;
+                // Covers a sequence aborted before the scheduler could say its container stopped.
+                SchedulerActivity.SchedulerStopped(state);
             }
             // Queued before the session is marked closed so the uploader's final flush still
             // carries it under the session it belongs to.
             Enqueue(TelemetryEventType.SessionEnd, "Sequence finished", null);
-            Logger.Info($"DeepSkyLog telemetry session {sessionUuid} finished");
+            Logger.Debug($"DeepSkyLog telemetry session {sessionUuid} finished");
             return Task.CompletedTask;
         }
 
@@ -296,7 +306,7 @@ namespace DeepSkyLog.NINAPlugin {
                     sessionUuid = Guid.NewGuid().ToString("N");
                     sessionClosed = false;
                     sessionEndQueued = false;
-                    Logger.Info($"DeepSkyLog telemetry session {sessionUuid} opened by a frame save");
+                    Logger.Debug($"DeepSkyLog telemetry session {sessionUuid} opened by a frame save");
                 }
             }
 
@@ -617,6 +627,36 @@ namespace DeepSkyLog.NINAPlugin {
             }
         }
 
+        // ------------------------------------------------------- Target Scheduler activity
+
+        /// <summary>
+        /// The scheduler picked a target. Reported straight away rather than waiting for the first
+        /// frame, which comes only after the slew, centering and often an autofocus run.
+        /// </summary>
+        internal void OnSchedulerTargetStarted(string project, string target) {
+            // A target started: the wait is over, whatever we were told earlier.
+            ClearExpectedStart("targetScheduler");
+            lock (stateLock) {
+                SchedulerActivity.TargetStarted(state, project, target);
+            }
+            if (!string.IsNullOrEmpty(target)) {
+                UpdateTarget(target);
+            }
+        }
+
+        internal void OnSchedulerWaiting(string project, string target) {
+            lock (stateLock) {
+                SchedulerActivity.WaitingFor(state, project, target);
+            }
+        }
+
+        internal void OnSchedulerStopped() {
+            ClearExpectedStart("targetScheduler");
+            lock (stateLock) {
+                SchedulerActivity.SchedulerStopped(state);
+            }
+        }
+
         /// <summary>
         /// Looks for a wait instruction currently running in the advanced sequence.
         /// <para>
@@ -722,13 +762,21 @@ namespace DeepSkyLog.NINAPlugin {
                         return Task.CompletedTask;
                     }
 
-                    if (message.Topic == SchedulerTargetTopic) {
-                        // A target started: the wait is over, whatever we were told earlier.
-                        owner.ClearExpectedStart("targetScheduler");
+                    if (message.Topic == SchedulerTargetTopic || message.Topic == SchedulerTargetRepeatTopic) {
+                        owner.OnSchedulerTargetStarted(ReadString(message, "ProjectName"),
+                                message.Content as string);
+                        return Task.CompletedTask;
+                    }
+
+                    if (message.Topic == SchedulerStoppedTopic) {
+                        owner.OnSchedulerStopped();
                         return Task.CompletedTask;
                     }
 
                     if (message.Topic != SchedulerWaitTopic) return Task.CompletedTask;
+
+                    owner.OnSchedulerWaiting(ReadString(message, "ProjectName"),
+                            ReadString(message, "TargetName"));
 
                     double? seconds = ReadDouble(message, "SecondsUntilNextTarget");
                     if (seconds == null || seconds < 0) {
@@ -886,8 +934,9 @@ namespace DeepSkyLog.NINAPlugin {
             }
             if (messageBroker != null && schedulerSubscriber != null) {
                 try {
-                    messageBroker.Unsubscribe(SchedulerWaitTopic, schedulerSubscriber);
-                    messageBroker.Unsubscribe(SchedulerTargetTopic, schedulerSubscriber);
+                    foreach (string topic in SchedulerTopics) {
+                        messageBroker.Unsubscribe(topic, schedulerSubscriber);
+                    }
                 } catch (Exception ex) {
                     Logger.Trace($"DeepSkyLog telemetry unsubscribe failed: {ex.Message}");
                 }

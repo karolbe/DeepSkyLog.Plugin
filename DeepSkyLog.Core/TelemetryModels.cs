@@ -121,6 +121,30 @@ namespace DeepSkyLog.NINAPlugin {
         [JsonProperty("expectedStartReason")]
         public string ExpectedStartReason { get; set; }
 
+        /// <summary>
+        /// "IMAGING", "WAITING" or "STOPPED" while Target Scheduler drives the session; null on a
+        /// rig that has never heard from it. Says which of the names below are current: see
+        /// <see cref="SchedulerActivity"/>.
+        /// </summary>
+        [JsonProperty("schedulerStatus")]
+        public string SchedulerStatus { get; set; }
+
+        /// <summary>The scheduler project being imaged. Current only while IMAGING.</summary>
+        [JsonProperty("schedulerProject")]
+        public string SchedulerProject { get; set; }
+
+        /// <summary>The scheduler target being imaged. Current only while IMAGING.</summary>
+        [JsonProperty("schedulerTarget")]
+        public string SchedulerTarget { get; set; }
+
+        /// <summary>The project the scheduler is waiting to start. Current only while WAITING.</summary>
+        [JsonProperty("schedulerNextProject")]
+        public string SchedulerNextProject { get; set; }
+
+        /// <summary>The target the scheduler is waiting to start. Current only while WAITING.</summary>
+        [JsonProperty("schedulerNextTarget")]
+        public string SchedulerNextTarget { get; set; }
+
         public SessionState Clone() {
             return (SessionState)MemberwiseClone();
         }

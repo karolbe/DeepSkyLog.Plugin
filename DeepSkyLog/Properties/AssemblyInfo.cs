@@ -60,8 +60,8 @@ using System.Runtime.InteropServices;
 
 As each LIGHT frame is saved, the plugin quietly syncs its metadata to the DeepSkyLog web app giving you an up-to-date view of all your imaging in one place.
 
-As an owner of a remote observatory, astrophotography traveller I know how hard it is to keep track of all the data you collect night after night.
-I created DeepSkyLog to make it easy to manage my all projects, track progress, and plan my future sessions. I hope it will help you too.
+As a remote-observatory owner and travelling astrophotographer, I know how hard it is to keep track of all the data you collect night after night.
+I created DeepSkyLog to make it easy to manage all my projects, track progress, and plan my future sessions. I hope it will help you too.
 
 Here is how DeepSkyLog can help you:
 
@@ -79,7 +79,7 @@ You can also plan future sessions with DeepSkyLog:
 
 Explore a live demo account - no signup: https://deepskylog.space/demo-login
 
-Free version available, or upgrade to Pro for more features:
+A free version is available, and a subscription adds more features.
 
 Learn more at https://deepskylog.space")]
 // Setting ComVisible to false makes the types in this assembly not visible

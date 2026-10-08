@@ -95,11 +95,11 @@
                 <TextBlock Margin="10,0,0,0"
                            VerticalAlignment="Center"
                            Foreground="DarkOrange"
-                           Text="Requires a paid subscription"
+                           Text="Requires a DeepSkyLog subscription"
                            Visibility="{Binding HasTelemetryAccess, Converter={StaticResource InverseBooleanToVisibilityConverter}}">
                     <TextBlock.ToolTip>
-                        Live telemetry is included on Trial and Full plans. It is not sent on the free
-                        tier; upgrade in the DeepSkyLog web app to unmute it.
+                        Live telemetry is included with a DeepSkyLog subscription, and during the
+                        trial. Without one it is not sent; you can subscribe in the DeepSkyLog web app.
                     </TextBlock.ToolTip>
                 </TextBlock>
             </StackPanel>
@@ -123,7 +123,9 @@
                             MinWidth="150"
                             Visibility="{Binding IsAuthenticated, Converter={StaticResource InverseBooleanToVisibilityConverter}}">
                         <Button.Style>
-                            <Style TargetType="Button">
+                            <!-- BasedOn keeps NINA's theme; without it WPF's default light-grey
+                                 chrome shows, and the theme's light text is unreadable on it. -->
+                            <Style TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
                                 <Style.Triggers>
                                     <DataTrigger Binding="{Binding IsAuthenticating}" Value="True">
                                         <Setter Property="IsEnabled" Value="False" />

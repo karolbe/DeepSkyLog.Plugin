@@ -97,7 +97,7 @@ namespace DeepSkyLog.NINAPlugin {
 
         public DeepSkyLogWatcher(IImageSaveMediator imageSaveMediator) {
             imageSaveMediator.ImageSaved += ImageSaveMeditator_ImageSaved;
-            Logger.Info("DeepSkyLog is loading");
+            Logger.Debug("DeepSkyLog is loading");
         }
 
         private void ImageSaveMeditator_ImageSaved(object sender, ImageSavedEventArgs msg) {
@@ -105,13 +105,13 @@ namespace DeepSkyLog.NINAPlugin {
                 Logger.Debug("DeepSkyLog not enabled");
                 return;
             }
-            Logger.Info("DeepSkyLog is enabled");
+            Logger.Debug("DeepSkyLog is enabled");
 
             string imageType = msg?.MetaData?.Image?.ImageType;
             if (!UploadLogic.ShouldUploadImageType(imageType,
                                                    Settings.Default.DeepSkyLogAllowSnapshots,
                                                    Settings.Default.DeepSkyLogSkipCalibrationFrames)) {
-                Logger.Info($"DeepSkyLog is not uploading this {imageType ?? "untyped"} frame; " +
+                Logger.Debug($"DeepSkyLog is not uploading this {imageType ?? "untyped"} frame; " +
                             "only light frames are sent unless the plugin options say otherwise");
                 return;
             }
@@ -140,7 +140,7 @@ namespace DeepSkyLog.NINAPlugin {
                     // the path and exposure start so the frame still uploads and de-duplicates on
                     // re-send — the server rejects a null checksum and drops the whole frame.
                     checksum = UploadLogic.FallbackChecksum(imageFilePath, msg.MetaData.Image.ExposureStart);
-                    Logger.Warning($"No file checksum for {imageFilePath}; using fallback {checksum}");
+                    Logger.Debug($"No file checksum for {imageFilePath}; using fallback {checksum}");
                 }
 
                 var combinedData = new {
@@ -671,8 +671,10 @@ namespace DeepSkyLog.NINAPlugin {
                 return null;
             }
 
-            string warning = $"Your saved {string.Join(" and ", problems)} no longer exists in your DeepSkyLog account. " +
-                             "Pick it again in the plugin options — until then, frames are not being saved.";
+            bool both = problems.Count > 1;
+            string warning = $"Your saved {string.Join(" and ", problems)} no longer {(both ? "exist" : "exists")} " +
+                             $"in your DeepSkyLog account. Pick {(both ? "them" : "it")} again in the plugin options. " +
+                             "Until then, frames the server refuses are kept on this PC.";
             Logger.Error($"DeepSkyLog: {warning}");
             return warning;
         }

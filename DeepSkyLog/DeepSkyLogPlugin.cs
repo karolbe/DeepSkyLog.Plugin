@@ -33,6 +33,10 @@ namespace DeepSkyLog.NINAPlugin {
         private string _authStatusMessage;
         private string _authenticatedUsername;
         private string _selectionWarning;
+        // Set when a new account's sign-in cleared the selection, so the list load that follows
+        // (which finds nothing stale in an empty selection) does not take the warning down
+        // before the user has picked again.
+        private bool _selectionClearedForNewOwner;
         private string _updateNotice;
 
         // A problem that persists (stale selection, lapsed subscription, expired sign-in) would
@@ -143,6 +147,7 @@ namespace DeepSkyLog.NINAPlugin {
                     _authenticatedUsername = validationResult.Username;
                     AuthStatusMessage = string.Empty; // Clear status - username shown in UI
                     RaisePropertyChanged(nameof(AuthenticatedUsername));
+                    ClaimSelectionFor(validationResult.Username);
                 } else if (validationResult.NeedsReauthentication) {
                     // Token expired or invalid - clear it and notify user
                     Logger.Warning($"DeepSkyLog: Token validation failed: {validationResult.Error}");
@@ -219,8 +224,12 @@ namespace DeepSkyLog.NINAPlugin {
             DeepSkyLogKey = string.Empty;
             AuthStatusMessage = "Logged out successfully.";
 
-            // Clear collections
+            // Clear collections. The remembered selection goes too, or the page could keep showing
+            // an entry from the account just signed out of. The saved IDs stay: signing back in to
+            // the same account should not cost the user their choice.
             Application.Current?.Dispatcher?.Invoke(() => {
+                _selectedLocation = null;
+                _selectedEquipment = null;
                 _locations.Clear();
                 _locations.Add(new DeepSkyLogWatcher.Location { Id = 0, Name = "Select Location..." });
                 _equipment.Clear();
@@ -286,10 +295,9 @@ namespace DeepSkyLog.NINAPlugin {
                 RaisePropertyChanged();
                 RaisePropertyChanged(nameof(IsAuthenticated));
                 RaisePropertyChanged(nameof(CanLogin));
-                // Refresh data when key changes
-                if (!string.IsNullOrEmpty(value)) {
-                    Task.Run(LoadDataAsync);
-                }
+                // No list load here: the only caller that sets a token, OnTokenReceived, validates
+                // and loads straight after. Loading here too fetched the lists twice per sign-in
+                // and reported a stale selection twice.
             }
         }
 
@@ -418,6 +426,7 @@ namespace DeepSkyLog.NINAPlugin {
         /// explicit act taken after the user has seen what is selected.
         /// </summary>
         private void OnSelectionChanged() {
+            _selectionClearedForNewOwner = false;
             SelectionWarning = null;
             // A fix that did not take should produce a fresh notification, not wait 30 minutes.
             _notifications.Reset(UploadRejectedKey);
@@ -484,13 +493,13 @@ namespace DeepSkyLog.NINAPlugin {
         /// </summary>
         private void OnUploadNeedsSubscription(string serverMessage) {
             _uploadsNeedSubscription = true;
-            string warning = $"{serverMessage} Frames are kept on this PC — once your DeepSkyLog plan " +
-                             "includes the NINA plugin, use the retry button below to send them.";
+            string warning = $"{serverMessage} Frames are kept on this PC — once your DeepSkyLog account " +
+                             "has a subscription, use the retry button below to send them.";
             Application.Current?.Dispatcher?.Invoke(() => SelectionWarning = warning);
             RefreshParkedUploads();
 
             Notify(SubscriptionKey,
-                   $"DeepSkyLog isn't accepting uploads on this account's plan. {serverMessage} Frames are kept on this PC.",
+                   $"DeepSkyLog uploads from N.I.N.A. need a subscription. {serverMessage} Frames are kept on this PC.",
                    error: true);
         }
 
@@ -515,8 +524,12 @@ namespace DeepSkyLog.NINAPlugin {
             if (!_notifications.ShouldNotify(SignInKey)) return;
 
             if (problem == SignInProblem.NotSignedIn) {
-                ShowNotification("DeepSkyLog is enabled but not signed in. Frames are kept on this PC " +
-                                 "and will upload once you sign in from the plugin options.", error: false);
+                const string notSignedIn = "DeepSkyLog is enabled but not signed in. Frames are kept on this PC " +
+                                           "and will upload once you sign in from the plugin options.";
+                // Logged too: the toast is gone by morning, and otherwise the log only says each
+                // frame was saved for retry, at Debug, with nothing explaining why.
+                Logger.Warning($"DeepSkyLog: {notSignedIn}");
+                ShowNotification(notSignedIn, error: false);
                 return;
             }
 
@@ -577,6 +590,43 @@ namespace DeepSkyLog.NINAPlugin {
             Application.Current?.Dispatcher?.Invoke(() => SelectionWarning = null);
         }
 
+        /// <summary>
+        /// Location and equipment IDs belong to one account on one server, but are saved globally.
+        /// Signing in elsewhere — another account, or beta instead of production — used to keep
+        /// the old IDs, which then pointed at nothing or, worse, at someone else's site. The
+        /// selection is therefore tagged with its owner, and dropped when a different owner signs
+        /// in. Selections saved before the tag existed are adopted by whoever signs in first.
+        /// </summary>
+        private void ClaimSelectionFor(string username) {
+            if (string.IsNullOrEmpty(username)) return;
+
+            string owner = $"{DeepSkyLogServer.BaseUrl}|{username}";
+            string previous = Settings.Default.SelectionOwner;
+            if (string.Equals(previous, owner, StringComparison.OrdinalIgnoreCase)) return;
+
+            bool hadSelection = Settings.Default.SelectedLocationId > 0 || Settings.Default.SelectedEquipmentId > 0;
+            Settings.Default.SelectionOwner = owner;
+            if (string.IsNullOrEmpty(previous) || !hadSelection) {
+                Settings.Default.Save();
+                return;
+            }
+
+            Settings.Default.SelectedLocationId = 0;
+            Settings.Default.SelectedEquipmentId = 0;
+            Settings.Default.Save();
+            _selectedLocation = null;
+            _selectedEquipment = null;
+            RaisePropertyChanged(nameof(SelectedLocation));
+            RaisePropertyChanged(nameof(SelectedEquipment));
+
+            const string message = "Signed in to a different DeepSkyLog account or server, so the saved location " +
+                                   "and equipment were cleared. Pick them again in the plugin options.";
+            Logger.Warning($"DeepSkyLog: {message}");
+            _selectionClearedForNewOwner = true;
+            SelectionWarning = message;
+            ShowNotification(message, error: false);
+        }
+
         private async Task LoadDataAsync() {
             if (string.IsNullOrEmpty(DeepSkyLogKey)) return;
 
@@ -615,6 +665,11 @@ namespace DeepSkyLog.NINAPlugin {
                         _equipment.Add(equipment);
                     }
 
+                    // Resolve afresh from the saved IDs: an object kept from the previous list may
+                    // belong to another account and would show a selection that is not saved.
+                    _selectedLocation = null;
+                    _selectedEquipment = null;
+
                     RaisePropertyChanged(nameof(Locations));
                     RaisePropertyChanged(nameof(Equipment));
                     RaisePropertyChanged(nameof(SelectedLocation));
@@ -622,7 +677,10 @@ namespace DeepSkyLog.NINAPlugin {
 
                     // A saved ID that is no longer in the account leaves the dropdown blank but
                     // keeps being sent on every upload — say so rather than letting it look unset.
-                    SelectionWarning = DeepSkyLogWatcher.ValidateSelectedIds(locations, equipments);
+                    string stale = DeepSkyLogWatcher.ValidateSelectedIds(locations, equipments);
+                    if (stale != null || !_selectionClearedForNewOwner) {
+                        SelectionWarning = stale;
+                    }
                 });
             } catch (Exception ex) {
                 Logger.Warning($"Failed to load locations/equipment: {ex.Message}");

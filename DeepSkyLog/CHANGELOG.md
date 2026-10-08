@@ -2,7 +2,34 @@
 
 ## Unreleased
 
+### Added
+- Uploaded frames now include peak guiding error in RA and Dec, in arcseconds, alongside the
+  guiding RMS.
+
 ### Fixed
+- With the plugin switched off, or between sequences, the NINA log no longer gets a "sent no
+  telemetry" warning every 15 minutes. These are your own choices, not faults, so they are noted
+  once at Debug instead.
+- The NINA log is quieter. Routine messages (plugin loading, telemetry attached, session
+  started/finished, sign-in steps, frames skipped by type, checksum fallback) are now logged at
+  Debug. Failures, sign-in results and plan or update notices are unchanged.
+- Signing in to a different DeepSkyLog account or server (for example beta instead of
+  production) no longer keeps the previous account's location and equipment. They are cleared,
+  with a warning and a notification asking you to pick them again. Signing back in to the same
+  account keeps your selection.
+- Signing in no longer loads locations and equipment twice, so a stale selection is reported
+  once. The message now says frames the server refuses are kept on this PC, rather than that
+  frames are not being saved.
+- The "Login with DeepSkyLog" button now matches NINA's theme. It was drawn as a light-grey
+  button with almost invisible text.
+- Wording about paid plans, tiers and upgrades now simply refers to a DeepSkyLog subscription,
+  in the options page, the plugin description, notifications and the log.
+- A frame kept back because nobody is signed in is now also explained in the NINA log, not only
+  in a notification, at the same reminder cadence as the notification.
+- Guiding RMS now shows on the Live page for rigs where it was always missing. It is now taken
+  from the RMS NINA records for each exposure, the same values written into the FITS header,
+  instead of the live guider readout, which some setups never fill in. Unguided frames report no
+  guiding rather than 0.00".
 - A sign-in that expires, or a plugin that is enabled without being signed in, is now reported
   with a notification. Previously frames were quietly kept on disk while the options still said
   "Connected". An expired sign-in is re-checked straight away, so the Login button comes back.

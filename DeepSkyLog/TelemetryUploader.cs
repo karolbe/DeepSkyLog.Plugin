@@ -74,10 +74,12 @@ namespace DeepSkyLog.NINAPlugin {
 
         /// <summary>
         /// How long telemetry may send nothing before saying so, and how often to repeat it. The
-        /// reasons for staying quiet — no session, not signed in, plugin disabled — are all normal
-        /// in isolation, so this only speaks up once the silence is long enough to be surprising to
-        /// someone watching a live view. Logged at Warning deliberately: a remote observatory is
-        /// usually running above Info, and "your live view is stale" is exactly what they need.
+        /// reasons for staying quiet — not signed in, plan without telemetry — are normal in
+        /// passing, so this only speaks up once the silence is long enough to be surprising to
+        /// someone watching a live view. Reasons the user chose (plugin switched off, no sequence
+        /// running) never warn: they are noted once at Debug and left alone. The rest are logged at
+        /// Warning deliberately: a remote observatory is usually running above Info, and "your live
+        /// view is stale" is exactly what they need.
         /// </summary>
         private const int IdleWarningAfterSeconds = 120;
         private const int IdleWarningRepeatSeconds = 900;
@@ -140,7 +142,7 @@ namespace DeepSkyLog.NINAPlugin {
             timer = new Timer(OnTick, null,
                 TimeSpan.FromSeconds(currentIntervalSeconds),
                 TimeSpan.FromSeconds(currentIntervalSeconds));
-            Logger.Info($"DeepSkyLog telemetry uploader started ({currentIntervalSeconds}s interval)");
+            Logger.Debug($"DeepSkyLog telemetry uploader started ({currentIntervalSeconds}s interval)");
         }
 
         private static int ConfiguredIntervalSeconds() {
@@ -159,7 +161,7 @@ namespace DeepSkyLog.NINAPlugin {
             // Telemetry has no user-facing switch: it follows the plugin's own enabled flag, and
             // the token check below means nothing leaves the machine unless the user is signed in.
             if (!Settings.Default.DeepSkyLogEnabled) {
-                ReportIdle("the DeepSkyLog plugin is switched off in its options");
+                ReportIdle("the DeepSkyLog plugin is switched off in its options", expected: true);
                 return;
             }
 
@@ -168,7 +170,7 @@ namespace DeepSkyLog.NINAPlugin {
             // refusal, another log line and another toast, all night. Cleared if the account is
             // later seen to have access, so an upgrade takes effect without restarting NINA.
             if (Volatile.Read(ref subscriptionBlocked) == 1) {
-                ReportIdle("this account's plan does not include live telemetry");
+                ReportIdle("live telemetry needs a DeepSkyLog subscription, which this account does not have");
                 return;
             }
 
@@ -177,7 +179,7 @@ namespace DeepSkyLog.NINAPlugin {
                 // No session is running, so there is nothing live to report. Equipment moving
                 // outside a sequence is therefore invisible to the web app — the single most
                 // likely reason a live view looks frozen while the rig is plainly doing something.
-                ReportIdle("no sequence is running, so there is no live session to report on");
+                ReportIdle("no sequence is running, so there is no live session to report on", expected: true);
                 return;
             }
 
@@ -274,8 +276,8 @@ namespace DeepSkyLog.NINAPlugin {
                 // the user exactly once, on the transition into the blocked state.
                 if (IsSubscriptionRefusal(response.StatusCode, body)) {
                     if (Interlocked.Exchange(ref subscriptionBlocked, 1) == 0) {
-                        Logger.Info("DeepSkyLog is not sending live telemetry: the account's plan "
-                                    + "does not include it. Sending stops until the plan changes.");
+                        Logger.Info("DeepSkyLog is not sending live telemetry: it needs a DeepSkyLog "
+                                    + "subscription. Sending resumes once the account has one.");
                         ServerRejected?.Invoke(DeepSkyLogWatcher.DescribeError(body));
                     }
                     return UploadResult.Rejected;
@@ -307,16 +309,22 @@ namespace DeepSkyLog.NINAPlugin {
         /// <summary>
         /// Notes why nothing is being sent, and says so once the silence gets long enough to look
         /// like a fault to someone watching a live view. The reason is tracked rather than logged
-        /// immediately because every one of them is normal in passing — between sequences, before
-        /// sign-in — and only becomes interesting when it persists.
+        /// immediately because every one of them is normal in passing — before sign-in, say — and
+        /// only becomes interesting when it persists. An <paramref name="expected"/> reason is the
+        /// user's own choice, not a fault, so it is noted once and never repeated: a plugin left
+        /// switched off would otherwise warn every 15 minutes for as long as NINA runs.
         /// </summary>
-        private void ReportIdle(string reason) {
+        private void ReportIdle(string reason, bool expected = false) {
             if (!string.Equals(reason, idleReason, StringComparison.Ordinal)) {
                 idleReason = reason;
                 idleSinceUtc = DateTime.UtcNow;
                 lastIdleWarningUtc = DateTime.MinValue;
+                if (expected) {
+                    Logger.Debug($"DeepSkyLog is not sending telemetry: {reason}.");
+                }
                 return;
             }
+            if (expected) return;
 
             DateTime now = DateTime.UtcNow;
             if ((now - idleSinceUtc).TotalSeconds < IdleWarningAfterSeconds) return;
@@ -384,7 +392,7 @@ namespace DeepSkyLog.NINAPlugin {
         /// </summary>
         public static void NoteAccess(bool hasAccess) {
             if (hasAccess && Interlocked.Exchange(ref subscriptionBlocked, 0) == 1) {
-                Logger.Info("DeepSkyLog telemetry re-enabled: the account's plan now includes it.");
+                Logger.Info("DeepSkyLog telemetry re-enabled: the account now has a subscription.");
             }
         }
 

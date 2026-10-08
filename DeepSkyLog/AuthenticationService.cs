@@ -37,7 +37,7 @@ namespace DeepSkyLog.NINAPlugin {
 
                 _cts = new CancellationTokenSource();
 
-                Logger.Info($"DeepSkyLog: Starting authentication listener on {redirectUri}");
+                Logger.Debug($"DeepSkyLog: Starting authentication listener on {redirectUri}");
 
                 // Generate a per-attempt CSRF nonce. The server echoes it back in the
                 // callback; mismatch (or absent local state) → reject. Without this an
@@ -47,7 +47,7 @@ namespace DeepSkyLog.NINAPlugin {
                 // Open browser to authentication page
                 // Use the same endpoint as the desktop app: /desktop-auth?callback=...
                 string authUrl = $"{BaseUrl}/desktop-auth?callback={Uri.EscapeDataString(redirectUri)}&state={Uri.EscapeDataString(_expectedState)}";
-                Logger.Info($"DeepSkyLog: Opening browser to /desktop-auth (state hidden)");
+                Logger.Debug($"DeepSkyLog: Opening browser to /desktop-auth (state hidden)");
 
                 Process.Start(new ProcessStartInfo {
                     FileName = authUrl,
@@ -136,7 +136,7 @@ namespace DeepSkyLog.NINAPlugin {
                         // Single-use: clear regardless of exchange outcome below.
                         _expectedState = null;
 
-                        Logger.Info("DeepSkyLog: One-time token received, exchanging for API token...");
+                        Logger.Debug("DeepSkyLog: One-time token received, exchanging for API token...");
 
                         // Exchange one-time token for long-lived API token
                         var exchangeResult = await ExchangeTokenAsync(oneTimeToken);

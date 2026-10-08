@@ -142,5 +142,17 @@ namespace DeepSkyLog.NINAPlugin.Properties {
                 this["DeepSkyLogTelemetryIntervalSeconds"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("")]
+        public string SelectionOwner {
+            get {
+                return ((string)(this["SelectionOwner"]));
+            }
+            set {
+                this["SelectionOwner"] = value;
+            }
+        }
     }
 }
